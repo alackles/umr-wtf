@@ -42,9 +42,9 @@ function election(config, plan, hh) {
 //   take-home view: premiums are pre-tax, so they cost (1 - t) each. Care is paid from taxed
 //                   money unless it goes through an FSA or HSA, in which case those dollars
 //                   cost (1 - t) too.
-// The account is a bucket that care fills first. Money set aside beyond the year's care is
-// not a cost: HSA money stays yours, FSA money rolls over up to the carryover limit. FSA
-// money beyond that limit is lost, and that is a cost.
+// Care is paid from the account first. Money set aside beyond the year's care is not a cost
+// of the plan: HSA money stays yours, and FSA money goes to other eligible things. It is
+// reported separately (`aside`) so the chart can show it without counting it.
 function breakdown(config, plan, hh, care, view) {
   const k = view === 'raw' ? 1 : 1 - (hh.taxRate || 0);
   const premium = premiumYear(config, plan, hh) * k;
@@ -55,21 +55,15 @@ function breakdown(config, plan, hh, care, view) {
   const used = Math.min(el.amount, C - free); // your own account dollars spent on care
   const careCost = used * k + (C - free - used);
   const leftover = el.amount - used;
-  let rolled = 0;
-  let forfeited = 0;
-  if (el.kind === 'fsa') {
-    rolled = Math.min(config.fsa.carryover || 0, leftover);
-    forfeited = leftover - rolled;
-  }
   const f = C > 0 ? careCost / C : 0;
   return {
     premium,
     ded: care.ded * f,
     cc: care.cc * f,
     extra: care.extra * f,
-    lost: forfeited * k,
-    total: premium + careCost + forfeited * k,
-    account: el.amount > 0 ? { kind: el.kind, set: el.amount * k, gross: el.amount, used, leftover, rolled, forfeited } : null,
+    total: premium + careCost,
+    aside: leftover * k,
+    account: el.amount > 0 ? { kind: el.kind, set: el.amount * k, gross: el.amount, used, leftover } : null,
   };
 }
 
@@ -96,16 +90,6 @@ function seriousItems(config, person, month) {
     allowed: it.allowed,
     group: 'Bad year: ' + it.label,
   }));
-}
-
-function scaled(items, k) {
-  return items.map((it) =>
-    Object.assign({}, it, {
-      allowed: it.allowed * k,
-      count: (it.count == null ? 1 : it.count) * k,
-      billed: it.billed == null ? undefined : it.billed * k,
-    })
-  );
 }
 
 function range(values) {
@@ -218,43 +202,4 @@ function evaluate(config, hh, opts = {}) {
   return { view, family, tierId: hh.tierId, plans, trades };
 }
 
-// Break-even: total yearly cost on each plan as usage scales from none to several times the
-// estimate. Returns points for drawing and the places where the cheapest plan changes.
-function breakEven(config, hh, opts = {}) {
-  const view = opts.view || 'takehome';
-  const maxK = opts.max || 3;
-  const steps = opts.steps || 60;
-  const tier = getTier(config, hh.tierId);
-  const family = hh.family != null ? hh.family : tier.family;
-  const anyRx = hh.items.some((it) => /^rx_/.test(it.category));
-  const expanded = config.plans.map((plan) => ({ plan, variants: expandVariants(plan, { family, rx: anyRx }).variants }));
-  const series = expanded.map(({ plan }) => ({ id: plan.id, short: plan.short, name: plan.name, points: [] }));
-  const ks = [];
-  for (let i = 0; i <= steps; i++) ks.push((maxK * i) / steps);
-  for (const k of ks) {
-    const items = scaled(hh.items, k);
-    expanded.forEach(({ variants }, pi) => {
-      const costs = variants.map((v) => yearCost(config, v.plan, hh, replay(items, v.plan, { family }).memberTotal, view));
-      const r = range(costs);
-      series[pi].points.push({ k, lo: r.lo, hi: r.hi, mid: (r.lo + r.hi) / 2 });
-    });
-  }
-  // Where does the cheapest plan (by midpoint) change?
-  const crossings = [];
-  let prev = null;
-  ks.forEach((k, i) => {
-    let best = null;
-    for (const s of series) if (!best || s.points[i].mid < best.points[i].mid - 1e-9) best = s;
-    if (prev && best.id !== prev.id) crossings.push({ k, from: prev.id, to: best.id });
-    prev = best;
-  });
-  const cheapestAt = (k) => {
-    const i = Math.round((k / maxK) * steps);
-    let best = null;
-    for (const s of series) if (!best || s.points[i].mid < best.points[i].mid - 1e-9) best = s;
-    return best.id;
-  };
-  return { ks, series, crossings, maxK, cheapestAtEstimate: cheapestAt(1), cheapestAtZero: cheapestAt(0) };
-}
-
-module.exports = { evaluate, breakEven, yearCost, breakdown, perPaycheck, premiumYear, election, scaled, SCENARIOS, SCENARIO_LABELS, JUDGED };
+module.exports = { evaluate, yearCost, breakdown, perPaycheck, premiumYear, election, SCENARIOS, SCENARIO_LABELS, JUDGED };

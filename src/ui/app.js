@@ -5,10 +5,10 @@
 const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
 const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
-const { evaluate, breakEven, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
+const { evaluate, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, COLUMNS } = require('../importer.js');
 const { CATEGORIES } = require('../plans.js');
-const { stackedBars, breakEvenChart, breakEvenSentence, hideTip } = require('./charts.js');
+const { stackedBars, hideTip } = require('./charts.js');
 const { itemsTable } = require('./table.js');
 
 const STORE_VERSION = 1;
@@ -777,7 +777,7 @@ function advancedSection(a, current, onPlan, next) {
         'div',
         { class: 'trio' },
         field('Combined tax rate on your last dollar', numberBox(adv, 'taxRate', { suffix: '%', placeholder: '30', max: 60, aria: 'tax rate' }), 'Federal bracket + 7.65% payroll tax + state. Roughly 25 to 40 for most people.'),
-        hasFsa ? field(`FSA election (${config.plans.filter((p) => p.account === 'fsa').map((p) => p.short).join(', ')})`, numberBox(adv, 'fsa', { prefix: '$', placeholder: '0', max: config.fsa.limit, aria: 'FSA election' }), `Up to ${dollars(config.fsa.limit)} a year. Unspent money over ${dollars(config.fsa.carryover)} is lost.`) : null,
+        hasFsa ? field(`FSA election (${config.plans.filter((p) => p.account === 'fsa').map((p) => p.short).join(', ')})`, numberBox(adv, 'fsa', { prefix: '$', placeholder: '0', max: config.fsa.limit, aria: 'FSA election' }), `Up to ${dollars(config.fsa.limit)} a year. What bills do not use can go to other eligible things, such as over-the-counter medicine; ${dollars(config.fsa.carryover)} can carry into next year.`) : null,
         hasHsa ? field(`HSA contribution (${config.plans.filter((p) => p.account === 'hsa').map((p) => p.short).join(', ')})`, numberBox(adv, 'hsa', { prefix: '$', placeholder: '0', max: hsaMax, aria: 'HSA contribution' }), `Up to ${dollars(hsaMax)} a year for your tier. The money stays yours.`) : null
       )
     ),
@@ -891,7 +891,7 @@ function compute() {
   if (problems.some((p) => p.blocking)) return { hh, problems };
   try {
     const view = S.answers.view === 'raw' ? 'raw' : 'takehome';
-    return { hh, problems, out: evaluate(config, hh, { view }), be: breakEven(config, hh, { view }) };
+    return { hh, problems, out: evaluate(config, hh, { view }) };
   } catch (e) {
     return { hh, problems: [{ blocking: true, text: `The table could not be replayed: ${e.message}` }] };
   }
@@ -1147,19 +1147,6 @@ function renderResults() {
   );
   resultsEl.appendChild(h('details', { class: 'block' }, h('summary', null, 'The numbers as a table'), h('div', { class: 'rows-wrap' }, table)));
 
-  // Break-even.
-  const beHost = h('div', null);
-  resultsEl.appendChild(
-    h(
-      'details',
-      { class: 'block', open: true },
-      h('summary', null, 'How wrong would the estimate have to be?'),
-      h('p', { class: 'intro' }, breakEvenSentence(res.be, out)),
-      beHost
-    )
-  );
-  beHost.appendChild(breakEvenChart(res.be, out, { width: Math.min(720, resultsEl.clientWidth - 8), priority: a.priority }));
-
   // The line items behind the questionnaire.
   if (S.mode === 'A') {
     const nameOf = new Map(a.people.map((p) => [p.id, p.name]));
@@ -1281,11 +1268,6 @@ function start(rawConfig) {
   app.appendChild(h('footer', { class: 'page-foot' }, `${config.planYear} plan year. ${config.source || ''} Built ${window.__BUILD__ || ''}.`));
   renderForm();
   renderResults();
-  let timer = null;
-  window.addEventListener('resize', () => {
-    clearTimeout(timer);
-    timer = setTimeout(renderResults, 160);
-  });
 }
 
 if (typeof document !== 'undefined') {

@@ -1,5 +1,5 @@
 'use strict';
-// The two charts: stacked bars (the front) and break-even (secondary).
+// The chart: stacked bars, one column per plan.
 // Marks carry colour; all text stays in text colours.
 
 const { h, dollars, dollarsRange } = require('./dom.js');
@@ -54,15 +54,14 @@ function niceTicks(min, max, target) {
 // ---- stacked bars: the front ---------------------------------------------------------------
 // One column per plan, named on the axis. Colour says what kind of money a segment is, never
 // which plan it belongs to. The solid stack is the year picked with the switch (quiet,
-// expected or bad); a dashed outline runs on up to the worst case; an FSA or HSA is a wider
-// box behind the care segments, which care fills from the bottom.
+// expected or bad); a dashed outline runs on up to the worst case. FSA or HSA money beyond
+// what the year's care uses is a dotted segment on top: set aside, not counted in the total.
 const PLOT_H = 300; // px, matches .cols in the stylesheet
 const SEGMENTS = [
   ['premium', 'Premiums'],
   ['ded', 'Deductible'],
   ['cc', 'Copays and coinsurance'],
   ['extra', 'Charges no cap covers'],
-  ['lost', 'FSA money lost'],
 ];
 const YEAR_WORDS = { quiet: 'quiet year', expected: 'expected year', bad: 'bad year' };
 
@@ -86,8 +85,7 @@ function stackedBars(out, ctx) {
   const sKey = YEAR_WORDS[ctx.scenario] ? ctx.scenario : 'expected';
   const priority = ctx.priority;
   const tops = plans.map((p) => {
-    const acct = p.scenarios[sKey].parts.account;
-    return Math.max(p.scenarios.ceiling.hi, p.scenarios.bad.hi, acct ? p.scenarios[sKey].parts.premium + acct.set : 0);
+    return Math.max(p.scenarios.ceiling.hi, p.scenarios.bad.hi, p.scenarios[sKey].hi + p.scenarios[sKey].parts.aside);
   });
   const ticks = niceTicks(0, Math.max(...tops), 4);
   const max = Math.max(Math.max(...tops), ticks[ticks.length - 1]) || 1;
@@ -97,7 +95,7 @@ function stackedBars(out, ctx) {
   const tickLabel = (t) => (t === 0 ? '$0' : compact ? '$' + (t / 1000).toLocaleString('en-US') + 'K' : dollars(t));
 
   const used = new Set(['premium']);
-  let anyBucket = false;
+  let anyAside = false;
   let anyOpen = false;
 
   const cols = h('div', { class: 'cols' });
@@ -111,16 +109,6 @@ function stackedBars(out, ctx) {
     const col = h('div', { class: 'col' + (dim ? ' dim' : ''), role: 'group', 'aria-label': `${p.name}, ${YEAR_WORDS[sKey]}` });
     const bar = h('div', { class: 'bar-area' });
     const hedge = p.atLeast && sKey !== 'bad' ? 'at least ' : '';
-
-    // The account: a wider box behind the care segments, as tall as what is set aside.
-    if (parts.account) {
-      anyBucket = true;
-      const acct = parts.account;
-      const bucket = h('div', { class: 'bucket', tabindex: '0', role: 'img', 'aria-label': accountWords(acct, ctx) });
-      place(bucket, `${p.id}:bucket`, pct(parts.premium), pct(acct.set));
-      attachTip(bucket, () => h('div', null, h('div', { class: 'tip-value' }, dollars(acct.gross)), h('div', { class: 'tip-label' }, `set aside in the ${acct.kind.toUpperCase()}, ${p.short}`), h('div', { class: 'tip-note' }, accountWords(acct, ctx))));
-      bar.appendChild(bucket);
-    }
 
     // The solid stack.
     let y = 0;
@@ -145,10 +133,21 @@ function stackedBars(out, ctx) {
       bar.appendChild(seg);
       topSeg = seg;
     }
+    // Account money beyond what this year's care uses: dotted, on top, not part of the total.
+    const aside = parts.account && parts.aside > 0.5 ? parts.aside : 0;
+    if (aside) {
+      anyAside = true;
+      const acct = parts.account;
+      const seg = h('div', { class: 'seg seg-aside', tabindex: '0', role: 'img', 'aria-label': `${p.name}: ${accountWords(acct, ctx)}` }, px(aside) >= 19 ? h('span', null, dollars(aside)) : null);
+      place(seg, `${p.id}:aside`, pct(sc.hi), pct(aside));
+      attachTip(seg, () => h('div', null, h('div', { class: 'tip-value' }, dollars(aside)), h('div', { class: 'tip-label' }, h('i', { class: 'k k-seg seg-aside' }), `Left in the ${acct.kind.toUpperCase()}, ${p.short}`), h('div', { class: 'tip-note' }, accountWords(acct, ctx))));
+      bar.appendChild(seg);
+      topSeg = seg;
+    }
     if (topSeg) topSeg.classList.add('cap');
 
     // The dashed outline, on up to the worst case.
-    const solidTop = sc.hi;
+    const solidTop = sc.hi + aside;
     const ceil = p.scenarios.ceiling.hi;
     const gap = Math.max(0, ceil - solidTop);
     const outline = h('div', { class: 'outline' + (priority === 'protect' ? ' emph' : ''), tabindex: '0', role: 'img', 'aria-label': `${p.name}: worst case ${dollars(ceil)}${p.noCeiling ? ' or more' : ''}` });
@@ -160,24 +159,23 @@ function stackedBars(out, ctx) {
         h('div', { class: 'tip-value' }, dollarsRange(p.scenarios.ceiling) + (p.noCeiling ? '+' : '')),
         h('div', { class: 'tip-label' }, `${p.short}: worst case`),
         h('div', { class: 'tip-note' }, p.noCeiling ? 'every cap reached, plus the charges no cap covers' : 'premiums plus the out-of-pocket cap: the most this plan can cost you in a year'),
-        gap > 0.5 ? h('div', { class: 'tip-note' }, `${dollars(gap)} above the ${YEAR_WORDS[sKey]}`) : null
+        ceil - sc.hi > 0.5 ? h('div', { class: 'tip-note' }, `${dollars(ceil - sc.hi)} above the ${YEAR_WORDS[sKey]}`) : null
       )
     );
     bar.appendChild(outline);
 
     // Labels: the year's total, and the worst case. When the outline is too short to hold
     // the total inside it, both sit above it.
-    // The total sits just above the solid stack (or above the account box, where that sticks
-    // out), inside the outline, on two lines when it is a range so it stays within the bar.
-    const bucketTop = parts.account ? parts.premium + parts.account.set : 0;
-    const anchor = Math.max(solidTop, bucketTop);
+    // The total sits just above the stack, inside the outline when there is room, on two
+    // lines when it is a range so it stays within the bar.
+    const anchor = solidTop;
     const ranged = sc.hi - sc.lo >= 1;
     const twoLines = ranged || !!hedge;
     const emphTotal = !(priority === 'protect' || priority === 'paycheck');
-    const roomy = px(ceil - anchor) >= (twoLines ? 2 : 1) * (emphTotal ? 20 : 17) + 14;
+    const roomy = px(ceil - anchor) >= (twoLines ? 2 : 1) * (emphTotal ? 20 : 17) + (aside ? 16 : 0) + 14;
     const totalText = (stacked) =>
       !twoLines || !stacked ? [h('b', null, hedge + dollarsRange(sc))] : ranged ? [h('b', null, hedge + dollars(sc.lo) + ' to'), h('br'), h('b', null, dollars(sc.hi))] : [h('b', null, hedge.trim()), h('br'), h('b', null, dollars(sc.lo))];
-    const total = h('div', { class: 'tot' + (emphTotal ? ' emph' : '') }, totalText(roomy));
+    const total = h('div', { class: 'tot' + (emphTotal ? ' emph' : '') }, totalText(roomy), aside ? h('small', null, `+ ${dollars(aside)} left in ${parts.account.kind.toUpperCase()}`) : null);
     const worst = h('div', { class: 'worst' + (priority === 'protect' ? ' emph' : '') }, 'worst case ', h('b', null, dollars(ceil) + (p.noCeiling ? '+' : '')));
     col.appendChild(bar);
     if (roomy) {
@@ -216,7 +214,7 @@ function stackedBars(out, ctx) {
   const legend = h('div', { class: 'mark-key' });
   for (const [k, name] of SEGMENTS) if (used.has(k)) legend.appendChild(key(`k-seg seg-${k}`, name));
   if (anyOpen) legend.appendChild(key('k-seg seg-open', 'Depends on an open plan question'));
-  if (anyBucket) legend.appendChild(key('k-bucket', 'Set aside in an FSA or HSA'));
+  if (anyAside) legend.appendChild(key('k-seg seg-aside', 'Left in the FSA or HSA after this year\'s care'));
   legend.appendChild(key('k-outline', 'On up to the worst case'));
 
   // Longer notes, by plan, under the chart.
@@ -254,10 +252,9 @@ function accountWords(acct, ctx) {
   let s = `${dollars(acct.gross)} set aside in the ${name}`;
   if (ctx.view === 'takehome' && Math.abs(acct.set - acct.gross) > 0.5) s += ` (${dollars(acct.set)} of take-home pay)`;
   if (acct.leftover < 0.5) return s + ". This year's care uses all of it.";
-  s += `. This year's care uses ${dollars(acct.used)}; ${dollars(acct.leftover)} is left over.`;
-  if (acct.kind === 'hsa') return s + ' It stays yours and is not counted as a cost.';
-  if (acct.forfeited > 0.5) return s + ` ${dollars(acct.rolled)} rolls into next year and ${dollars(acct.forfeited)} is lost, which is counted.`;
-  return s + ' It rolls into next year and is not counted as a cost.';
+  s += `. This year's care uses ${dollars(acct.used)}, which leaves ${dollars(acct.leftover)}`;
+  if (ctx.view === 'takehome' && acct.gross > 0) s += ` (${dollars((acct.leftover * acct.set) / acct.gross)} of take-home pay)`;
+  return s + (acct.kind === 'hsa' ? ' in the account, yours to keep. It is not counted in the total.' : ' for other eligible things, such as over-the-counter medicine. It is not counted in the total.');
 }
 
 function segTip(p, sKey, key, name, v, ctx) {
@@ -267,11 +264,10 @@ function segTip(p, sKey, key, name, v, ctx) {
     ded: 'what you pay in full before the plan starts sharing costs',
     cc: 'flat copays, and your share of bills once the deductible is met',
     extra: 'out-of-network charges above what the plan recognises, and care it does not cover',
-    lost: "FSA money beyond this year's care and the carryover limit",
   }[key];
   box.appendChild(h('div', { class: 'tip-note' }, about));
   const acct = p.scenarios[sKey].parts.account;
-  if (acct && acct.used > 0.5 && ctx.view === 'takehome' && key !== 'premium' && key !== 'lost') {
+  if (acct && acct.used > 0.5 && ctx.view === 'takehome' && key !== 'premium') {
     box.appendChild(h('div', { class: 'tip-note' }, `${dollars(acct.used)} of this year's care is paid from the ${acct.kind.toUpperCase()} with untaxed money, so it takes less out of your pay than its face value`));
   }
   const what = { quiet: 'recurring care only, no one-offs', expected: 'the year your answers describe', bad: 'the expected year plus ' + (ctx.seriousLabel || 'one serious event') }[sKey];
@@ -279,135 +275,4 @@ function segTip(p, sKey, key, name, v, ctx) {
   return box;
 }
 
-// ---- break-even ----------------------------------------------------------------------------
-// Plans are told apart by line style and direct labels here: colour already means the
-// kind of money in the chart above.
-const DASHES = ['none', '7 4', '2 4', '10 3 2 3', '1 5', '12 4'];
-const lineKey = (i) => h('svg', { class: 'linekey-svg', width: 26, height: 8, viewBox: '0 0 26 8', 'aria-hidden': 'true' }, h('line', { class: 'line', x1: 1, x2: 25, y1: 4, y2: 4, 'stroke-dasharray': DASHES[i % DASHES.length] }));
-
-function breakEvenChart(be, out, ctx) {
-  const W = Math.max(320, ctx.width || 560);
-  const H = 250;
-  const m = { l: 50, r: 58, t: 16, b: 40 };
-  const iw = W - m.l - m.r;
-  const ih = H - m.t - m.b;
-  const all = be.series.flatMap((s) => s.points);
-  const yMin = Math.min(...all.map((p) => p.lo));
-  const yMax = Math.max(...all.map((p) => p.hi));
-  const ticks = niceTicks(yMin, yMax, 4);
-  const y0 = Math.min(yMin, ticks[0]);
-  const y1 = Math.max(yMax, ticks[ticks.length - 1]);
-  const X = (k) => m.l + (k / be.maxK) * iw;
-  const Y = (v) => m.t + ih - ((v - y0) / (y1 - y0 || 1)) * ih;
-  const compact = y1 >= 10000;
-  const tickLabel = (t) => (compact ? '$' + (t / 1000).toLocaleString('en-US') + 'K' : dollars(t));
-
-  const svg = h('svg', { class: 'be', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': 'Total yearly cost on each plan as the amount of care goes from none to three times the estimate' });
-  for (const t of ticks) {
-    svg.appendChild(h('line', { class: 'grid', x1: m.l, x2: m.l + iw, y1: Y(t), y2: Y(t) }));
-    svg.appendChild(h('text', { class: 'tick', x: m.l - 8, y: Y(t) + 4, 'text-anchor': 'end' }, tickLabel(t)));
-  }
-  const xt = [
-    [0, 'no care'],
-    [0.5, 'half'],
-    [1, 'your estimate'],
-    [2, 'double'],
-    [3, 'triple'],
-  ].filter(([k]) => k <= be.maxK);
-  for (const [k, label] of xt) {
-    svg.appendChild(h('text', { class: 'tick' + (k === 1 ? ' strong' : ''), x: X(k), y: m.t + ih + 18, 'text-anchor': k === 0 ? 'start' : 'middle' }, label));
-  }
-  svg.appendChild(h('text', { class: 'axis-title', x: m.l + iw / 2, y: H - 4, 'text-anchor': 'middle' }, 'how much care you end up using'));
-  svg.appendChild(h('line', { class: 'here', x1: X(1), x2: X(1), y1: m.t, y2: m.t + ih }));
-
-  const dimmed = new Set(out.plans.filter((p) => p.neverCheapest && ctx.priority !== 'paycheck').map((p) => p.id));
-  const ends = [];
-  be.series.forEach((s, i) => {
-    const dash = DASHES[i % DASHES.length];
-    const cls = dimmed.has(s.id) ? ' dim' : '';
-    if (s.points.some((p) => p.hi - p.lo > 1)) {
-      const up = s.points.map((p) => `${X(p.k)},${Y(p.hi)}`);
-      const down = s.points.map((p) => `${X(p.k)},${Y(p.lo)}`).reverse();
-      svg.appendChild(h('polygon', { class: 'band' + cls, points: up.concat(down).join(' ') }));
-    }
-    svg.appendChild(h('polyline', { class: 'line' + cls, points: s.points.map((p) => `${X(p.k)},${Y(p.mid)}`).join(' '), 'stroke-dasharray': dash }));
-    const here = s.points.reduce((a, b) => (Math.abs(b.k - 1) < Math.abs(a.k - 1) ? b : a));
-    svg.appendChild(h('circle', { class: 'dot' + cls, cx: X(here.k), cy: Y(here.mid), r: 4.5 }));
-    const last = s.points[s.points.length - 1];
-    ends.push({ y: Y(last.mid), at: Y(last.mid), label: s.short });
-  });
-  // Direct labels at the line ends, spread apart where the lines finish close together.
-  ends.sort((a, b) => a.y - b.y);
-  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 14) ends[i].y = ends[i - 1].y + 14;
-  for (const e of ends) {
-    if (Math.abs(e.y - e.at) > 1) svg.appendChild(h('line', { class: 'leader', x1: m.l + iw + 1, x2: m.l + iw + 7, y1: e.at, y2: e.y }));
-    svg.appendChild(h('text', { class: 'endlabel', x: m.l + iw + 9, y: e.y + 4 }, e.label));
-  }
-
-  // Hover: a crosshair that snaps to the nearest step, one tooltip listing every plan.
-  const cross = h('line', { class: 'cross', y1: m.t, y2: m.t + ih, x1: 0, x2: 0, visibility: 'hidden' });
-  svg.appendChild(cross);
-  const hit = h('rect', { class: 'hit', x: m.l, y: m.t, width: iw, height: ih, tabindex: '0', 'aria-label': 'Break-even chart. Use left and right arrow keys to read values.' });
-  let idx = be.ks.findIndex((k) => k >= 1);
-  const show = (i) => {
-    idx = Math.max(0, Math.min(be.ks.length - 1, i));
-    const k = be.ks[idx];
-    cross.setAttribute('x1', X(k));
-    cross.setAttribute('x2', X(k));
-    cross.setAttribute('visibility', 'visible');
-    const box = h('div', null, h('div', { class: 'tip-note' }, k === 0 ? 'no care at all' : `${k.toFixed(2).replace(/\.?0+$/, '')} times your estimate`));
-    const rows = be.series
-      .map((s, si) => ({ s, si, p: s.points[idx] }))
-      .sort((a, b) => a.p.mid - b.p.mid);
-    for (const { s, si, p } of rows) {
-      box.appendChild(h('div', { class: 'tip-row' }, lineKey(si), h('b', null, dollarsRange(p)), ' ', s.short));
-    }
-    const r = svg.getBoundingClientRect();
-    showTip(box, r.left + (X(k) / W) * r.width, r.top + m.t);
-  };
-  hit.addEventListener('pointermove', (e) => {
-    const r = svg.getBoundingClientRect();
-    const k = (((e.clientX - r.left) / r.width) * W - m.l) / iw;
-    show(Math.round(k * (be.ks.length - 1)));
-  });
-  hit.addEventListener('pointerleave', () => {
-    cross.setAttribute('visibility', 'hidden');
-    hideTip();
-  });
-  hit.addEventListener('focus', () => show(idx));
-  hit.addEventListener('blur', () => {
-    cross.setAttribute('visibility', 'hidden');
-    hideTip();
-  });
-  hit.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowLeft') show(idx - 1);
-    else if (e.key === 'ArrowRight') show(idx + 1);
-    else return;
-    e.preventDefault();
-  });
-  svg.appendChild(hit);
-
-  const legend = h(
-    'div',
-    { class: 'legend' },
-    be.series.map((s, i) => h('span', null, lineKey(i), s.name))
-  );
-  return h('div', { class: 'be-wrap' }, legend, svg);
-}
-
-// In words: how far the estimate would have to be off before the cheapest plan changes.
-function breakEvenSentence(be, out) {
-  const name = (id) => (out.plans.find((p) => p.id === id) || {}).short || id;
-  const best = name(be.cheapestAtEstimate);
-  if (!be.crossings.length) return `${best} is the cheapest at every level of care from none to ${be.maxK} times your estimate.`;
-  const below = be.crossings.filter((c) => c.k <= 1).pop();
-  const above = be.crossings.find((c) => c.k > 1);
-  const pct = (k) => Math.round(Math.abs(k - 1) * 100);
-  const bits = [];
-  if (below) bits.push(below.k < 0.04 ? `${name(below.from)} only wins with almost no care at all` : `if you used ${pct(below.k)}% less care than estimated, ${name(below.from)} would be cheaper`);
-  if (above) bits.push(`if you used ${above.k >= 2 ? above.k.toFixed(1).replace(/\.0$/, '') + ' times the care' : pct(above.k) + '% more care than'} estimated, ${name(above.to)} would be cheaper`);
-  let s = `At your estimate ${best} is the cheapest. ` + bits.join('; ') + '.';
-  return s.replace(/\. ([a-z])/, (m0, c) => '. ' + c.toUpperCase());
-}
-
-module.exports = { stackedBars, breakEvenChart, breakEvenSentence, hideTip };
+module.exports = { stackedBars, hideTip };

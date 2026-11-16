@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { validateConfig, getPlan } = require('../src/plans.js');
 const { build, defaultAnswers, newPerson } = require('../src/household.js');
-const { evaluate, breakEven, yearCost, perPaycheck, breakdown } = require('../src/outlook.js');
+const { evaluate, yearCost, perPaycheck, breakdown } = require('../src/outlook.js');
 
 const config = validateConfig(require('../demo/plans.demo.json'));
 const near = (got, want, tol = 0.01) => assert.ok(Math.abs(got - want) <= tol, `got ${got}, want ${want}`);
@@ -117,9 +117,10 @@ test('take-home view: premiums are pre-tax, care is not, unless it goes through 
   near(yearCost(config, fern, hh, 1000, 'takehome'), 160 * 26 * 0.7 + 1000);
   // FSA of 800 against 1000 of care: 800 of it is pre-tax.
   near(yearCost(config, fern, { ...hh, fsa: 800 }, 1000, 'takehome'), 160 * 26 * 0.7 + 1000 - 0.3 * 800);
-  // FSA of 2200 against 1000 of care: 640 rolls over, 560 is lost. Lost money is a cost in either view.
-  near(yearCost(config, fern, { ...hh, fsa: 2200 }, 1000, 'takehome'), 160 * 26 * 0.7 + 0.7 * (2200 - 640));
-  near(yearCost(config, fern, { ...hh, fsa: 2200 }, 1000, 'raw'), 160 * 26 + 1000 + 560);
+  // FSA of 2200 against 1000 of care: all the care is pre-tax. The rest is not a cost
+  // of the plan in either view; it goes to other eligible things.
+  near(yearCost(config, fern, { ...hh, fsa: 2200 }, 1000, 'takehome'), 160 * 26 * 0.7 + 0.7 * 1000);
+  near(yearCost(config, fern, { ...hh, fsa: 2200 }, 1000, 'raw'), 160 * 26 + 1000);
   // HSA: care paid through it is pre-tax. Money set aside beyond the year's care is savings,
   // not a cost and not a credit.
   near(yearCost(config, lichen, { ...hh, hsa: 2100 }, 900, 'takehome'), 80 * 26 * 0.7 + 0.7 * 900);
@@ -128,18 +129,18 @@ test('take-home view: premiums are pre-tax, care is not, unless it goes through 
   near(perPaycheck(config, fern, { ...hh, fsa: 1440 }, 'raw').total, 160 + 60);
 });
 
-test('the pieces of a year add up, and the account is a bucket care fills first', () => {
+test('the pieces of a year add up, and care is paid from the account first', () => {
   const fern = getPlan(config, 'fern');
   const hh = { tierId: 'employee', credit: 0, taxRate: 0.3, fsa: 1100, hsa: 0, hsaEligible: true };
   const b = breakdown(config, fern, hh, { ded: 400, cc: 280, extra: 0 }, 'takehome');
-  near(b.premium + b.ded + b.cc + b.extra + b.lost, b.total);
+  near(b.premium + b.ded + b.cc + b.extra, b.total);
   near(b.ded + b.cc, 0.7 * 680); // all of the care went through the account
   near(b.account.set, 0.7 * 1100);
   near(b.account.leftover, 420);
-  near(b.account.rolled, 420);
-  near(b.lost, 0);
+  near(b.aside, 0.7 * 420); // left in the account: shown, not counted
   const more = breakdown(config, fern, hh, { ded: 400, cc: 1300, extra: 0 }, 'takehome');
   near(more.ded + more.cc, 0.7 * 1100 + 600); // the account empties; the rest is at face value
+  near(more.aside, 0);
   assert.strictEqual(breakdown(config, fern, { ...hh, fsa: 0 }, { ded: 1, cc: 1, extra: 0 }, 'raw').account, null);
 });
 
@@ -179,9 +180,9 @@ test('every scenario comes with its pieces, and they add up to its cost', () => 
     for (const p of evaluate(config, build(config, a), { view }).plans) {
       for (const s of ['floor', 'quiet', 'expected', 'bad', 'ceiling']) {
         const b = p.scenarios[s].parts;
-        near(b.premium + b.ded + b.cc + b.extra + b.lost, p.scenarios[s].lo);
+        near(b.premium + b.ded + b.cc + b.extra, p.scenarios[s].lo);
       }
-      near(p.scenarios.floor.parts.premium, p.scenarios.floor.lo - p.scenarios.floor.parts.lost);
+      near(p.scenarios.floor.parts.premium, p.scenarios.floor.lo);
       assert.ok(p.scenarios.ceiling.lo >= p.scenarios.bad.hi - 0.01);
     }
   }
@@ -208,14 +209,6 @@ test('out-of-network care: the worst case is marked as having no true ceiling', 
   assert.strictEqual(byId(out, 'fern').noCeiling, true);
   for (const p of out.plans) assert.ok(p.scenarios.ceiling.lo >= p.scenarios.bad.hi - 0.01, 'the worst case is never below the bad year');
   near(byId(out, 'fern').variants[0].expected.uncapped, 24 * 200 * 0.3, 0.5);
-});
-
-test('break-even: with no care the cheapest premium wins; with a lot, the low cap does', () => {
-  const a = single({ usage: 'counts', counts: { office: 6, therapy: 0, urgent: 0, er: 0 }, dedMet: 400, oopMet: 400 + 120 + 0.15 * 2900 });
-  const be = breakEven(config, build(config, a), { view: 'raw' });
-  assert.strictEqual(be.cheapestAtZero, 'lichen');
-  assert.ok(be.crossings.length >= 1);
-  assert.strictEqual(be.series.length, 3);
 });
 
 test('leaving mid-year: premiums and care for part of the year', () => {
