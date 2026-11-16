@@ -1,0 +1,11 @@
+{
+  "name": "umr-wtf",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A medical plan chooser that shows the trade, not a verdict. One self-contained page, no network.",
+  "scripts": {
+    "test": "node --test test/",
+    "build": "node build.js"
+  },
+  "license": "MIT"
+}

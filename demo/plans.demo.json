@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "planYear": 2099,
+  "employer": "Example Employer",
+  "audience": "people at Example Employer",
+  "administrator": "the plan administrator",
+  "network": "Example Network",
+  "source": "Invented numbers for demonstration and tests. Not any real plan.",
+
+  "payPeriods": { "premium": 26, "fsa": 24, "hsa": 26 },
+
+  "tiers": [
+    { "id": "employee", "label": "Employee", "family": false },
+    { "id": "spouse", "label": "Employee + Spouse/Partner", "family": true },
+    { "id": "children", "label": "Employee + Child(ren)", "family": true },
+    { "id": "family", "label": "Family", "family": true }
+  ],
+
+  "plans": [
+    {
+      "id": "fern",
+      "name": "Fern (low deductible)",
+      "short": "Fern",
+      "currentYearOption": true,
+      "account": "fsa",
+      "in": { "ded": [400, 800], "dedMode": "embedded", "coins": 0.15, "oop": [1800, 3600] },
+      "out": { "ded": [900, 1800], "dedMode": "embedded", "coins": 0.45, "oop": [3900, 7800] },
+      "rules": {
+        "preventive": { "free": true },
+        "office": { "copay": 20 },
+        "teladoc": { "copay": 0 },
+        "urgent": { "copay": 45 },
+        "er_facility": { "copay": 220, "coins": true },
+        "er_physician": { "coins": true },
+        "ded_coins": { "ded": true, "coins": true },
+        "rx_generic": { "copay": 8 },
+        "rx_preferred": { "copay": 40 },
+        "rx_nonpreferred": { "copay": 70 },
+        "rx_specialty": { "coins": 0.25, "min": 60, "max": 180 },
+        "not_covered": { "uncovered": true }
+      },
+      "outRules": {
+        "default": { "ded": true, "coins": true },
+        "er_facility": { "copay": 220, "coins": 0.15, "acc": "in" },
+        "er_physician": { "coins": 0.15, "acc": "in" },
+        "not_covered": { "uncovered": true }
+      },
+      "premiums": {
+        "employee": [160.0, 140.0],
+        "spouse": [380.0, 360.0, 340.0],
+        "children": [300.0, 280.0],
+        "family": [470.0, 450.0, 430.0]
+      }
+    },
+    {
+      "id": "moss",
+      "name": "Moss (middle)",
+      "short": "Moss",
+      "currentYearOption": true,
+      "account": "fsa",
+      "in": { "ded": [1100, 2200], "dedMode": "embedded", "coins": 0.1, "oop": [3300, 6600] },
+      "out": { "ded": [2100, 4200], "dedMode": "embedded", "coins": 0.35, "oop": [6500, 13000] },
+      "rules": {
+        "preventive": { "free": true },
+        "office": { "copay": 20 },
+        "teladoc": { "copay": 0 },
+        "urgent": { "copay": 45 },
+        "er_facility": { "copay": 220, "coins": true },
+        "er_physician": { "coins": true },
+        "ded_coins": { "ded": true, "coins": true },
+        "rx_generic": { "copay": 8 },
+        "rx_preferred": { "copay": 40 },
+        "rx_nonpreferred": { "copay": 70 },
+        "rx_specialty": { "coins": 0.25, "min": 60, "max": 180 },
+        "not_covered": { "uncovered": true }
+      },
+      "outRules": {
+        "default": { "ded": true, "coins": true },
+        "er_facility": { "copay": 220, "coins": 0.1, "acc": "in" },
+        "er_physician": { "coins": 0.1, "acc": "in" },
+        "not_covered": { "uncovered": true }
+      },
+      "premiums": {
+        "employee": [125.0, 105.0],
+        "spouse": [310.0, 290.0, 270.0],
+        "children": [240.0, 220.0],
+        "family": [385.0, 365.0, 345.0]
+      }
+    },
+    {
+      "id": "lichen",
+      "name": "Lichen (high deductible)",
+      "short": "Lichen",
+      "currentYearOption": false,
+      "account": "hsa",
+      "in": { "ded": [2800, 5600], "dedMode": "aggregate", "coins": 0.25, "oop": [5500, 11000] },
+      "out": { "ded": [5200, 10400], "dedMode": "aggregate", "coins": 0.5, "oop": [11500, 23000] },
+      "rules": {
+        "preventive": { "free": true },
+        "office": { "ded": true, "coins": true },
+        "teladoc": { "ded": true, "coins": true },
+        "urgent": { "ded": true, "coins": true },
+        "er_facility": { "ded": true, "coins": true },
+        "er_physician": { "ded": true, "coins": true },
+        "ded_coins": { "ded": true, "coins": true },
+        "rx_generic": { "ded": true, "coins": true },
+        "rx_preferred": { "ded": true, "coins": true },
+        "rx_nonpreferred": { "ded": true, "coins": true },
+        "rx_specialty": { "ded": true, "coins": true },
+        "not_covered": { "uncovered": true }
+      },
+      "outRules": {
+        "default": { "ded": true, "coins": true },
+        "not_covered": { "uncovered": true }
+      },
+      "premiums": {
+        "employee": [80.0, 60.0],
+        "spouse": [205.0, 185.0, 165.0],
+        "children": [155.0, 135.0],
+        "family": [255.0, 235.0, 215.0]
+      },
+      "unknowns": [
+        {
+          "id": "preventive-rx",
+          "appliesTo": "rx",
+          "text": "the example guide doesn't say whether preventive medications skip the deductible",
+          "options": [
+            { "label": "all prescriptions go to the deductible", "patch": {} },
+            { "label": "generic prescriptions skip the deductible", "patch": { "rules.rx_generic": { "coins": true } } }
+          ]
+        }
+      ]
+    }
+  ],
+
+  "credits": {
+    "labels": ["no wellness credit", "employee's wellness credit", "both wellness credits"]
+  },
+  "spousalSurcharge": { "monthly": 60, "text": "Applies if your spouse could get coverage through their own employer." },
+  "fsa": { "limit": 3200, "carryover": 640 },
+  "hsa": { "single": 4300, "family": 8600, "catchUp55": 1000, "employerContribution": 0 },
+
+  "typicalAllowed": { "office": 180, "therapy": 110, "urgent": 230, "er_facility": 1700, "er_physician": 320 },
+  "seriousEvent": {
+    "label": "an ER visit and a hospital stay for one person",
+    "items": [
+      { "category": "er_facility", "allowed": 1700, "label": "ER visit" },
+      { "category": "er_physician", "allowed": 320, "label": "ER physician" },
+      { "category": "ded_coins", "allowed": 26000, "label": "hospital stay" }
+    ]
+  },
+  "events": {
+    "birth": { "allowed": 15500, "label": "pregnancy and birth" },
+    "surgery": { "allowed": 11000, "label": "planned surgery" },
+    "recurring": { "allowedPerMonth": 650, "label": "recurring treatment" },
+    "dme": { "allowed": 1300, "label": "medical equipment" }
+  },
+  "oonAllowedShare": 0.7,
+
+  "ruleNotes": ["Invented plans. Shapes differ on purpose so the tests cover copays, embedded and pooled deductibles, and an ER rule that skips the deductible."],
+  "footnotes": ["This is the demonstration build. The numbers are invented."],
+  "hints": {
+    "accumulators": "On a recent explanation of benefits, look for the lines that read \"$X out of $Y\": deductible first, then out-of-pocket, for the person and for the family.",
+    "disclaimer": "Demonstration data. Estimates only."
+  }
+}
