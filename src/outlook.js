@@ -70,7 +70,7 @@ function perPaycheck(config, plan, hh, view) {
   const premium = premiumPerPeriod(plan, hh.tierId, hh.credit) + sur;
   const elect = el.amount > 0 ? el.amount / el.periods : 0;
   const k = view === 'raw' ? 1 : 1 - (hh.taxRate || 0);
-  return { premium: premium * k, election: elect * k, total: (premium + elect) * k, electionKind: el.kind };
+  return { premium: premium * k, election: elect * k, total: (premium + elect) * k, gross: premium + elect, grossElection: elect, electionKind: el.kind };
 }
 
 function seriousItems(config, person, month) {
@@ -124,7 +124,11 @@ function evaluate(config, hh, opts = {}) {
           badPerson = id;
         }
       }
-      const cap = ceiling(v.plan, family);
+      // Ceiling: the in-network cap. If the household uses out-of-network care, that has its
+      // own cap, and whatever sits above the allowed amount (or is not covered) has none, so
+      // the figure counts both caps plus those extras as described. It is still not a true
+      // ceiling, and the page says so.
+      const cap = ceiling(v.plan, family) + (anyOut ? (family ? v.plan.out.oop[1] : v.plan.out.oop[0]) : 0) + bad.uncapped;
       const care = { floor: 0, quiet: quiet.memberTotal, expected: expected.memberTotal, bad: bad.memberTotal, ceiling: cap };
       const cost = {};
       for (const s of SCENARIOS) cost[s] = yearCost(config, v.plan, hh, care[s], view);
@@ -145,6 +149,7 @@ function evaluate(config, hh, opts = {}) {
       premiumYear: premiumYear(config, plan, hh),
       paycheck: perPaycheck(config, plan, hh, view),
       deductible: family ? plan.in.ded[1] : plan.in.ded[0],
+      deductibleOne: family && plan.in.dedMode === 'aggregate' ? plan.in.ded[1] : plan.in.ded[0],
       cap: ceiling(plan, family),
       scenarios,
       variants: per,

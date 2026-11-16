@@ -48,10 +48,9 @@ function newPerson(id, role, name) {
 }
 
 function defaultAnswers(config, todayIso) {
-  const current = config.plans.find((p) => p.currentYearOption);
   return {
     asOf: todayIso,
-    currentPlan: current ? current.id : null,
+    currentPlan: undefined, // undefined: not answered yet. null: no plan this year.
     people: [newPerson('p1', 'self')],
     familyMet: { ded: null, oop: null },
     gates: { rx: null, oon: null, hsa: null, cap: null },
@@ -125,6 +124,10 @@ function build(config, answers) {
   });
   const family = nextYear.length > 1;
 
+  if (answers.currentPlan === undefined) {
+    problems.push({ code: 'current-missing', blocking: true, anchor: 'q-current', text: 'Pick the plan you are on this year, or "None".' });
+  }
+
   const M = monthsElapsed(answers.asOf);
   if (current && thisYear.length && M == null) {
     problems.push({ code: 'as-of', blocking: true, anchor: 'q-asof', text: 'The as-of date for the deductible and out-of-pocket numbers is missing or unreadable.' });
@@ -172,7 +175,7 @@ function build(config, answers) {
     const counted = person.usage === 'counts';
     if (!preset && !counted) {
       if (person.nextYear || onPlan) {
-        problems.push({ code: 'usage-missing', blocking: true, person: person.id, anchor: `q-usage-${person.id}`, text: `Pick how much care ${person.name} uses.` });
+        problems.push({ code: 'usage-missing', blocking: true, person: person.id, anchor: `q-usage-${person.id}`, text: person.role === 'self' && person.name === 'You' ? 'Pick how much care you use.' : `Pick how much care ${person.name} uses.` });
       }
       continue;
     }
@@ -205,7 +208,7 @@ function build(config, answers) {
       const dedMet = num(person.dedMet);
       const oopMet = num(person.oopMet);
       if (dedMet == null || oopMet == null) {
-        problems.push({ code: 'met-missing', blocking: true, person: person.id, anchor: `q-met-${person.id}`, text: `Fill in deductible met and out-of-pocket met for ${person.name} (zero is a fine answer).` });
+        problems.push({ code: 'met-missing', blocking: true, person: person.id, anchor: `q-met-${person.id}`, text: `Fill in deductible met and out-of-pocket met for ${person.role === 'self' && person.name === 'You' ? 'yourself' : person.name} (zero is a fine answer).` });
         continue;
       }
       // Year-to-date counts: typed directly, or the preset's yearly rate so far.
@@ -380,28 +383,8 @@ function build(config, answers) {
   }
 
   // ---- money facts ---------------------------------------------------------------------
-  const spouseCovered = nextYear.some((p) => p.role === 'spouse');
-  const credit = adv.creditSelf ? (spouseCovered && adv.creditSpouse ? 2 : 1) : 0;
-  const surcharge = spouseCovered && !!adv.surcharge;
-  const taxRate = Math.min(60, Math.max(0, num(adv.taxRate) != null ? num(adv.taxRate) : 30)) / 100;
-
-  const hsaAsked = answers.gates && answers.gates.hsa === true;
-  let hsaEligible = !(hsaAsked && answers.hsa && (answers.hsa.selfMedicare || answers.hsa.spouseFsa));
-  let hsaFactor = 1;
-  if (ev.turning65 && ev.turning65.on) {
-    const who = people.find((p) => p.id === ev.turning65.person) || people[0];
-    const month = Math.min(12, Math.max(1, num(ev.turning65.month) || 6));
-    if (who && who.role === 'self') {
-      hsaFactor = (month - 1) / 12;
-      notes.push({ code: 'turning-65', text: `HSA contributions have to stop once Medicare starts. If you enrol in Medicare when you turn 65 in ${MONTHS[month - 1]}, the HSA limit is pro-rated to ${month - 1} of 12 months. You can stay on the employer plan either way.` });
-    } else if (who) {
-      notes.push({ code: 'turning-65', text: `${who.name} can move to Medicare at 65. If they leave this plan mid-year the premium tier changes; that is not modelled here.` });
-    }
-  }
-  const hsaLimit = config.hsa ? (family ? config.hsa.family : config.hsa.single) * hsaFactor : 0;
-  if (leaving) {
-    notes.push({ code: 'leaving', text: `Leaving after ${MONTHS[lastMonth - 1]}: premiums and care are counted for ${plural(lastMonth, 'month')}. Deductibles and caps do not shrink for a part year.` });
-  }
+  const facts = moneyFacts(config, answers, nextYear, family, lastMonth, notes);
+  const { spouseCovered, credit, surcharge, hsaAsked } = facts;
 
   // ---- the "assuming..." line ----------------------------------------------------------
   const A = (id, text, anchor) => assumptions.push({ id, text, anchor });
@@ -417,7 +400,6 @@ function build(config, answers) {
   else if (defaultPricesUsed.size) {
     A('rx-price', `cash prices of ${[...defaultPricesUsed].map((t) => `${money(RX_DEFAULT_PRICE[t])} per ${RX_LABEL[t]} fill`).join(', ')}`, 'g-rx');
   }
-  if (config.plans.some((p) => p.account === 'hsa') && !hsaAsked) A('hsa-eligible', 'you are allowed to use an HSA', 'g-hsa');
   if (current && thisYear.length && people.every((p) => p.shape === 'steady') && !people.some((p) => num(p.oneOff) > 0)) {
     A('shape', 'this year\'s care was spread evenly, with no one-offs', 'adv-shape');
   }
@@ -433,22 +415,15 @@ function build(config, answers) {
     const label = config.events[p.key].label;
     A(`event-${p.key}`, p.key === 'recurring' ? `${label} at ${money(p.allowed)} a month` : `${label} at ${money(p.allowed)}`, `ev-${p.key}`);
   }
-  if (config.credits) A('credit', config.credits.labels[credit], 'adv-premium');
-  if (spouseCovered && config.spousalSurcharge && !surcharge) A('surcharge', 'no spousal surcharge', 'adv-premium');
 
-  return {
+  finishAssumptions(config, facts, A);
+
+  return Object.assign(facts.public, {
     tierId: tier.id,
     tierLabel: tier.label,
     family,
-    credit,
-    surcharge,
-    monthsCovered: lastMonth,
-    taxRate,
-    fsa: num(adv.fsa) || 0,
-    hsa: num(adv.hsa) || 0,
-    hsaEligible,
-    hsaLimit,
-    items,
+    items: items.filter((it) => !(answers.groupsOff || []).includes(it.group)),
+    allItems: items,
     people: nextYear.map((p) => ({ id: p.id, name: p.name })),
     lowerBound: lowerBound.filter((id) => nextIds.has(id)),
     anyRx,
@@ -457,7 +432,122 @@ function build(config, answers) {
     notes,
     assumptions,
     working,
+  });
+}
+
+// Tax, premium modifiers and account eligibility: shared by both paths.
+function moneyFacts(config, answers, nextYear, family, lastMonth, notes) {
+  const adv = answers.adv || {};
+  const ev = answers.events || {};
+  const people = answers.people || [];
+  const leaving = ev.leaving && ev.leaving.on;
+  const spouseCovered = nextYear.some((p) => p.role === 'spouse');
+  const credit = adv.creditSelf ? (spouseCovered && adv.creditSpouse ? 2 : 1) : 0;
+  const surcharge = spouseCovered && !!adv.surcharge;
+  const taxRate = Math.min(60, Math.max(0, num(adv.taxRate) != null ? num(adv.taxRate) : 30)) / 100;
+
+  const hsaAsked = answers.gates && answers.gates.hsa === true;
+  const hsaEligible = !(hsaAsked && answers.hsa && (answers.hsa.selfMedicare || answers.hsa.spouseFsa));
+  let hsaFactor = 1;
+  if (ev.turning65 && ev.turning65.on) {
+    const who = people.find((p) => p.id === ev.turning65.person) || people[0];
+    const month = Math.min(12, Math.max(1, num(ev.turning65.month) || 6));
+    if (who && who.role === 'self') {
+      hsaFactor = (month - 1) / 12;
+      notes.push({ code: 'turning-65', text: `HSA contributions have to stop once Medicare starts. If you enrol in Medicare when you turn 65 in ${MONTHS[month - 1]}, the HSA limit is pro-rated to ${month - 1} of 12 months. You can stay on the employer plan either way.` });
+    } else if (who) {
+      notes.push({ code: 'turning-65', text: `${who.name} can move to Medicare at 65. If they leave this plan mid-year the premium tier changes; that is not modelled here.` });
+    }
+  }
+  const hsaLimit = config.hsa ? (family ? config.hsa.family : config.hsa.single) * hsaFactor : 0;
+  if (leaving) {
+    notes.push({ code: 'leaving', text: `Leaving after ${MONTHS[lastMonth - 1]}: premiums and care are counted for ${plural(lastMonth, 'month')}. Deductibles and caps do not shrink for a part year.` });
+  }
+  return {
+    spouseCovered,
+    credit,
+    surcharge,
+    hsaAsked,
+    public: { credit, surcharge, monthsCovered: lastMonth, taxRate, fsa: num(adv.fsa) || 0, hsa: num(adv.hsa) || 0, hsaEligible, hsaLimit },
   };
 }
 
-module.exports = { build, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts, typicalAllowed };
+function finishAssumptions(config, facts, A) {
+  if (config.plans.some((p) => p.account === 'hsa') && !facts.hsaAsked) A('hsa-eligible', 'you are allowed to use an HSA', 'g-hsa');
+  if (config.credits) A('credit', config.credits.labels[facts.credit], 'adv-premium');
+  if (facts.spouseCovered && config.spousalSurcharge && !facts.surcharge) A('surcharge', 'no spousal surcharge', 'adv-premium');
+  const f = facts.public;
+  const hasFsa = config.plans.some((p) => p.account === 'fsa');
+  const hasHsa = config.plans.some((p) => p.account === 'hsa');
+  if (!(f.fsa > 0) && !(f.hsa > 0) && (hasFsa || hasHsa)) A('accounts', `no ${[hasFsa && 'FSA', hasHsa && 'HSA'].filter(Boolean).join(' or ')} contributions`, 'adv-tax');
+  A('tax', `a ${Math.round(f.taxRate * 100)}% combined tax rate`, 'adv-tax');
+  if (config.seriousEvent) A('bad-year', `a bad year means ${config.seriousEvent.label}`, null);
+}
+
+// Path B: an imported (or hand-edited) table of line items. The people list supplies roles
+// for the premium tier; the table supplies the care.
+//   table: { items: [...], groupsOff: [labels], oneoffGroups: { label: bool } }
+function buildFromTable(config, answers, table) {
+  const problems = [];
+  const notes = [];
+  const assumptions = [];
+  const A = (id, text, anchor) => assumptions.push({ id, text, anchor });
+  const people = answers.people || [];
+  const nextYear = people.filter((p) => p.nextYear);
+  const tier = tierFor(config, {
+    spouse: nextYear.filter((p) => p.role === 'spouse').length,
+    children: nextYear.filter((p) => p.role === 'child').length,
+  });
+  const family = nextYear.length > 1;
+  const ev = answers.events || {};
+  const leaving = ev.leaving && ev.leaving.on;
+  const lastMonth = leaving ? Math.min(12, Math.max(1, num(ev.leaving.month) || 12)) : 12;
+
+  const off = new Set((table && table.groupsOff) || []);
+  const oneoffs = (table && table.oneoffGroups) || {};
+  const UNGROUPED = '(no group)';
+  const all = ((table && table.items) || []).map((it) => {
+    const group = it.group || UNGROUPED;
+    const flagged = Object.prototype.hasOwnProperty.call(oneoffs, group) ? !!oneoffs[group] : !!it.oneoff;
+    return Object.assign({}, it, { group, oneoff: flagged });
+  });
+  if (!all.length) problems.push({ code: 'table-empty', blocking: true, anchor: 'import-box', text: 'Paste or load a table of line items to begin.' });
+  const byName = new Map(people.map((p) => [p.name.trim().toLowerCase(), p]));
+  const unknown = new Set();
+  for (const it of all) if (!byName.has(String(it.person).trim().toLowerCase())) unknown.add(it.person);
+  if (unknown.size) {
+    problems.push({ code: 'table-people', blocking: true, anchor: 'q-people', text: `The table has care for ${[...unknown].join(', ')}, who ${unknown.size === 1 ? 'is' : 'are'} not in the list of people. Names have to match.` });
+  }
+  const items = all
+    .filter((it) => !off.has(it.group) && (it.month || 1) <= lastMonth)
+    .filter((it) => {
+      const p = byName.get(String(it.person).trim().toLowerCase());
+      return !p || p.nextYear;
+    })
+    .map((it) => {
+      const p = byName.get(String(it.person).trim().toLowerCase());
+      return Object.assign({}, it, { person: p ? p.id : it.person });
+    });
+
+  const facts = moneyFacts(config, answers, nextYear, family, lastMonth, notes);
+  A('table', 'the table is the whole coming year, as given', 'import-box');
+  finishAssumptions(config, facts, A);
+
+  return Object.assign(facts.public, {
+    tierId: tier.id,
+    tierLabel: tier.label,
+    family,
+    items,
+    allItems: all,
+    people: nextYear.map((p) => ({ id: p.id, name: p.name })),
+    lowerBound: [],
+    anyRx: items.some((it) => /^rx_/.test(it.category)),
+    anyOon: items.some((it) => it.network === 'out'),
+    problems,
+    notes,
+    assumptions,
+    working: [],
+  });
+}
+
+module.exports = { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts, typicalAllowed };

@@ -170,6 +170,7 @@ test('out-of-network care: the worst case is marked as having no true ceiling', 
   const hh = build(config, a);
   const out = evaluate(config, hh, { view: 'raw' });
   assert.strictEqual(byId(out, 'fern').noCeiling, true);
+  for (const p of out.plans) assert.ok(p.scenarios.ceiling.lo >= p.scenarios.bad.hi - 0.01, 'the worst case is never below the bad year');
   near(byId(out, 'fern').variants[0].expected.uncapped, 24 * 200 * 0.3, 0.5);
 });
 
