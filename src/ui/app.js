@@ -1072,6 +1072,13 @@ function renderResults() {
       list.appendChild(h('li', null, s + e));
     }
     resultsEl.appendChild(h('div', { class: 'block' }, h('h3', null, 'The trade'), list));
+  } else {
+    const standing = out.plans.filter((p) => !p.neverCheapest);
+    if (standing.length === 1 && out.plans.length > 1) {
+      resultsEl.appendChild(
+        h('div', { class: 'block' }, h('h3', null, 'The trade'), h('p', null, `For your answers there is no trade to weigh over a year: ${standing[0].name} costs least in the quiet year, the expected year, the bad year and the worst case. The others only win on the size of the paycheck deduction.`))
+      );
+    }
   }
 
   // The "assuming..." line.
