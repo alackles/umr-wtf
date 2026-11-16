@@ -8,13 +8,13 @@ const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PR
 const { evaluate, breakEven, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, COLUMNS } = require('../importer.js');
 const { CATEGORIES } = require('../plans.js');
-const { rangeBars, fitLabels, breakEvenChart, breakEvenSentence, hideTip } = require('./charts.js');
+const { stackedBars, breakEvenChart, breakEvenSentence, hideTip } = require('./charts.js');
 const { itemsTable } = require('./table.js');
 
 const STORE_VERSION = 1;
 let config;
 let S; // { v, mode: 'A' | 'B', answers, table: { items, groupsOff, oneoffGroups }, importText, importErrors }
-const ui = { openGroups: new Set(), advOpen: false, uid: 1 };
+const ui = { openGroups: new Set(), advOpen: false, uid: 1, scenario: 'expected' };
 let formEl;
 let resultsEl;
 
@@ -1022,7 +1022,7 @@ function renderResults() {
             return h('li', null, p.anchor ? jumpLink(p.text, person ? `q-usage-${person.id}` : p.anchor) : p.text, person ? trustButtons(person) : null);
           })
         ),
-        h('div', { class: 'ghost', 'aria-hidden': 'true' }, config.plans.map((p, i) => h('div', { class: 'ghost-row', style: { '--c': `var(--s${(i % 6) + 1})` } }, h('span', null, p.name), h('i', { style: { left: 8 + i * 9 + '%', width: 58 - i * 6 + '%' } }))))
+        h('div', { class: 'ghost', 'aria-hidden': 'true' }, config.plans.map((p, i) => h('div', { class: 'ghost-col' }, h('i', { style: { height: 46 + i * 9 + '%' } }), h('i', { style: { height: 38 - i * 11 + '%' } }), h('span', null, p.name))))
       )
     );
     footer(res);
@@ -1042,15 +1042,56 @@ function renderResults() {
     )
   );
 
-  const bars = rangeBars(out, {
-    priority: a.priority,
-    canAbsorb: a.canAbsorb,
-    view,
-    viewLabel: view === 'takehome' ? 'in take-home pay' : 'in raw dollars',
-    seriousLabel: config.seriousEvent && config.seriousEvent.label,
-  });
-  resultsEl.appendChild(bars);
-  fitLabels(bars);
+  // Which year the solid bars show. The dashed outline always runs on to the worst case.
+  const year = ['quiet', 'expected', 'bad'].includes(ui.scenario) ? ui.scenario : 'expected';
+  const yearNote = {
+    quiet: 'Recurring care only: this year\'s one-offs do not repeat.',
+    expected: 'The year your answers describe.',
+    bad: `The expected year, plus ${(config.seriousEvent && config.seriousEvent.label) || 'one serious event'}.`,
+  }[year];
+  resultsEl.appendChild(
+    h(
+      'div',
+      { class: 'year-switch' },
+      h(
+        'div',
+        { class: 'toggle', role: 'group', 'aria-label': 'Which year the bars show' },
+        [
+          ['quiet', 'Quiet year'],
+          ['expected', 'Expected'],
+          ['bad', 'Bad year'],
+        ].map(([v, label]) =>
+          h(
+            'button',
+            {
+              type: 'button',
+              class: year === v ? 'on' : '',
+              'aria-pressed': year === v ? 'true' : 'false',
+              'data-focus': `year:${v}`,
+              onclick: () => {
+                ui.scenario = v;
+                renderResults();
+                const again = resultsEl.querySelector(`[data-focus="year:${v}"]`);
+                if (again) again.focus();
+              },
+            },
+            label
+          )
+        )
+      ),
+      h('span', { class: 'view-note' }, yearNote)
+    )
+  );
+  resultsEl.appendChild(
+    stackedBars(out, {
+      priority: a.priority,
+      canAbsorb: a.canAbsorb,
+      view,
+      viewLabel: view === 'takehome' ? 'in take-home pay' : 'in raw dollars',
+      scenario: year,
+      seriousLabel: config.seriousEvent && config.seriousEvent.label,
+    })
+  );
 
   // The trade in words.
   if (out.trades.length) {

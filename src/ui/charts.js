@@ -1,9 +1,8 @@
 'use strict';
-// The two charts: range bars (the front) and break-even (secondary).
-// Marks carry the plan colour; all text stays in text colours.
+// The two charts: stacked bars (the front) and break-even (secondary).
+// Marks carry colour; all text stays in text colours.
 
 const { h, dollars, dollarsRange } = require('./dom.js');
-const { SCENARIO_LABELS } = require('../outlook.js');
 
 // ---- one shared tooltip --------------------------------------------------------------------
 let tip = null;
@@ -52,183 +51,240 @@ function niceTicks(min, max, target) {
   return out;
 }
 
-// ---- range bars ----------------------------------------------------------------------------
-// out: result of outlook.evaluate.  ctx: { priority, canAbsorb, viewLabel }
-function rangeBars(out, ctx) {
-  const plans = out.plans;
-  const lo = Math.min(...plans.map((p) => p.scenarios.floor.lo));
-  const hi = Math.max(...plans.map((p) => Math.max(p.scenarios.ceiling.hi, p.scenarios.bad.hi)));
-  const pad = (hi - lo) * 0.03 || 1;
-  const min = lo - pad;
-  const max = hi + pad;
-  const x = (v) => ((v - min) / (max - min)) * 100;
-  const priority = ctx.priority;
+// ---- stacked bars: the front ---------------------------------------------------------------
+// One column per plan, named on the axis. Colour says what kind of money a segment is, never
+// which plan it belongs to. The solid stack is the year picked with the switch (quiet,
+// expected or bad); a dashed outline runs on up to the worst case; an FSA or HSA is a wider
+// box behind the care segments, which care fills from the bottom.
+const PLOT_H = 300; // px, matches .cols in the stylesheet
+const SEGMENTS = [
+  ['premium', 'Premiums'],
+  ['ded', 'Deductible'],
+  ['cc', 'Copays and coinsurance'],
+  ['extra', 'Charges no cap covers'],
+  ['lost', 'FSA money lost'],
+];
+const YEAR_WORDS = { quiet: 'quiet year', expected: 'expected year', bad: 'bad year' };
 
-  const root = h('div', { class: 'bars' });
-  root.appendChild(
-    h(
-      'div',
-      { class: 'mark-key', 'aria-hidden': 'true' },
-      h('span', null, h('i', { class: 'k k-track' }), 'premiums only to worst case'),
-      h('span', null, h('i', { class: 'k k-quiet' }), 'quiet year'),
-      h('span', null, h('i', { class: 'k k-expected' }), 'expected'),
-      h('span', null, h('i', { class: 'k k-bad' }), 'bad year')
-    )
-  );
-
-  const ticks = niceTicks(min, max, 5);
-  const grid = () => h('div', { class: 'gridlines', 'aria-hidden': 'true' }, ticks.map((t) => h('i', { style: { left: x(t) + '%' } })));
-
-  plans.forEach((p, i) => {
-    const dim = p.neverCheapest && priority !== 'paycheck';
-    const row = h('section', { class: 'plan-row' + (dim ? ' dim' : ''), style: { '--c': `var(--s${(i % 6) + 1})` }, 'aria-label': p.name });
-    const s = p.scenarios;
-
-    const pay = p.paycheck;
-    const payEl = h(
-      'span',
-      { class: 'paycheck' + (priority === 'paycheck' ? ' emph' : '') },
-      h('b', null, dollars(pay.total)),
-      ctx.view === 'takehome' ? ' less take-home per paycheck' : ' per paycheck',
-      h(
-        'small',
-        null,
-        ' (' +
-          (ctx.view === 'takehome' ? `${dollars(pay.gross)} before tax` : 'the premium') +
-          (pay.election > 0 ? `, including ${dollars(pay.grossElection)} to the ${pay.electionKind.toUpperCase()}` : '') +
-          ')'
-      )
-    );
-    row.appendChild(h('header', { class: 'plan-head' }, h('span', { class: 'swatch' }), h('h3', null, p.name), payEl));
-
-    const wrap = h('div', { class: 'track-wrap' });
-    wrap.appendChild(grid());
-    const track = h('div', {
-      class: 'track' + (priority === 'protect' ? ' cap-emph' : ''),
-      style: { left: x(s.floor.lo) + '%', width: Math.max(0.5, x(s.ceiling.hi) - x(s.floor.lo)) + '%' },
-    });
-    wrap.appendChild(track);
-
-    const mark = (key, cls) => {
-      const r = s[key];
-      const ranged = r.hi - r.lo >= 1;
-      const el = h('div', {
-        class: `mark ${cls}` + (ranged ? ' ranged' : '') + (key === 'expected' && priority !== 'protect' && priority !== 'paycheck' ? ' emph' : ''),
-        tabindex: '0',
-        role: 'img',
-        'aria-label': `${p.name}, ${SCENARIO_LABELS[key]}: ${p.atLeast && key !== 'bad' ? 'at least ' : ''}${dollarsRange(r)} a year`,
-        style: ranged ? { left: x(r.lo) + '%', width: `max(12px, ${x(r.hi) - x(r.lo)}%)` } : { left: x(r.lo) + '%' },
-      });
-      attachTip(el, () => tipFor(p, key, ctx));
-      return el;
-    };
-    wrap.appendChild(mark('quiet', 'm-quiet'));
-    wrap.appendChild(mark('bad', 'm-bad'));
-    wrap.appendChild(mark('expected', 'm-expected'));
-    // Hit areas for the two ends.
-    for (const key of ['floor', 'ceiling']) {
-      const el = h('div', { class: 'end-hit', tabindex: '0', role: 'img', 'aria-label': `${p.name}, ${SCENARIO_LABELS[key]}: ${dollarsRange(s[key])} a year`, style: { left: x(key === 'floor' ? s.floor.lo : s.ceiling.hi) + '%' } });
-      attachTip(el, () => tipFor(p, key, ctx));
-      wrap.appendChild(el);
-    }
-
-    const expMid = (s.expected.lo + s.expected.hi) / 2;
-    const top = h(
-      'div',
-      { class: 'lab-top' + (priority === 'protect' || priority === 'paycheck' ? '' : ' emph'), style: { left: x(expMid) + '%' }, 'data-fit': 'center' },
-      'expected ',
-      h('b', null, (p.atLeast ? 'at least ' : '') + dollarsRange(s.expected))
-    );
-    wrap.appendChild(top);
-    row.appendChild(wrap);
-
-    const ends = h(
-      'div',
-      { class: 'ends' },
-      h('span', { class: 'end-lo', style: { left: x(s.floor.lo) + '%' } }, h('b', null, dollarsRange(s.floor)), ' premiums only'),
-      h(
-        'span',
-        { class: 'end-hi' + (priority === 'protect' ? ' emph' : ''), style: { left: x(s.ceiling.hi) + '%' } },
-        'worst case ',
-        h('b', null, dollarsRange(s.ceiling) + (p.noCeiling ? '+' : ''))
-      )
-    );
-    row.appendChild(ends);
-
-    const flags = [];
-    if (p.neverCheapest) {
-      flags.push(h('p', { class: 'flag flag-never' }, 'Never the cheapest over a year for your answers.' + (p.smallestPaycheck ? ' It does have the smallest paycheck deduction.' : '')));
-    }
-    if (priority === 'paycheck' && ctx.canAbsorb === false && p.smallestPaycheck && plans.length > 1) {
-      flags.push(
-        h(
-          'p',
-          { class: 'flag flag-warn' },
-          h('span', { class: 'ico', 'aria-hidden': 'true' }, '!'),
-          `Smallest deduction, and the largest possible early-year bill: you could owe up to ${dollars(p.deductibleOne)}${p.deductible > p.deductibleOne ? ` for one person (${dollars(p.deductible)} across the family)` : ''} before this plan pays for most care. You said a bill that size would be hard to absorb.`
-        )
-      );
-    }
-    if (p.atLeast) flags.push(h('p', { class: 'flag' }, 'Shown as "at least": someone is at their out-of-pocket cap this year, so their care beyond the cap left no trace. Saying which month they hit it sharpens this.'));
-    if (p.noCeiling) flags.push(h('p', { class: 'flag' }, 'The worst case counts both caps and the extras from the care you described, but there is no true ceiling: charges the plan does not recognise are yours and count toward nothing, so more of that care means more cost.'));
-    if (p.hsaBlocked) flags.push(h('p', { class: 'flag' }, 'Shown without the HSA tax benefit, because you are not eligible to contribute.'));
-    if (p.open.length) flags.push(h('p', { class: 'flag' }, 'A range, not a point, because ' + p.open.map((u) => u.text).join('; and ') + '.'));
-    if (flags.length) row.appendChild(h('div', { class: 'flags' }, flags));
-    root.appendChild(row);
-  });
-
-  // Axis
-  const axis = h('div', { class: 'axis', 'aria-hidden': 'true' });
-  const compact = ticks[ticks.length - 1] >= 10000;
-  for (const t of ticks) axis.appendChild(h('span', { style: { left: x(t) + '%' } }, compact ? '$' + (t / 1000).toLocaleString('en-US') + 'K' : dollars(t)));
-  root.appendChild(h('div', { class: 'axis-wrap' }, axis, h('div', { class: 'axis-title' }, `total for the year, ${ctx.viewLabel}`)));
-  return root;
+// Remember where each mark was, so a change of answers or of year glides instead of jumping.
+const lastPlace = new Map();
+function place(el, key, bottom, height) {
+  const prev = lastPlace.get(key);
+  lastPlace.set(key, { bottom, height });
+  const set = (b, hgt) => {
+    el.style.bottom = b + '%';
+    if (hgt != null) el.style.height = hgt + '%';
+  };
+  if (!prev || typeof requestAnimationFrame !== 'function') return set(bottom, height);
+  set(prev.bottom, height == null ? null : prev.height);
+  requestAnimationFrame(() => requestAnimationFrame(() => set(bottom, height)));
 }
 
-function tipFor(p, key, ctx) {
-  const s = p.scenarios[key];
-  const box = h('div', null);
-  box.appendChild(h('div', { class: 'tip-value' }, (p.atLeast && (key === 'quiet' || key === 'expected') ? 'at least ' : '') + dollarsRange(s)));
-  box.appendChild(h('div', { class: 'tip-label' }, h('i', { class: 'linekey' }), `${p.short}: ${SCENARIO_LABELS[key]}`));
-  const care = s.care;
-  const what = { floor: 'no care beyond free preventive visits', quiet: 'recurring care only, no one-offs', expected: 'the year your answers describe', bad: 'the expected year plus ' + (ctx.seriousLabel || 'one serious event'), ceiling: p.noCeiling ? 'every cap reached, plus the charges no cap covers' : 'the out-of-pocket cap reached' }[key];
-  box.appendChild(h('div', { class: 'tip-note' }, what));
-  box.appendChild(h('div', { class: 'tip-note' }, `care ${dollarsRange(care)} + premiums ${dollars(p.premiumYear)}` + (ctx.view === 'takehome' ? ', then adjusted for tax' : '')));
+// out: result of outlook.evaluate.  ctx: { priority, canAbsorb, view, viewLabel, scenario, seriousLabel }
+function stackedBars(out, ctx) {
+  const plans = out.plans;
+  const sKey = YEAR_WORDS[ctx.scenario] ? ctx.scenario : 'expected';
+  const priority = ctx.priority;
+  const tops = plans.map((p) => {
+    const acct = p.scenarios[sKey].parts.account;
+    return Math.max(p.scenarios.ceiling.hi, p.scenarios.bad.hi, acct ? p.scenarios[sKey].parts.premium + acct.set : 0);
+  });
+  const ticks = niceTicks(0, Math.max(...tops), 4);
+  const max = Math.max(Math.max(...tops), ticks[ticks.length - 1]) || 1;
+  const pct = (v) => (v / max) * 100;
+  const px = (v) => (v / max) * PLOT_H;
+  const compact = max >= 10000;
+  const tickLabel = (t) => (t === 0 ? '$0' : compact ? '$' + (t / 1000).toLocaleString('en-US') + 'K' : dollars(t));
+
+  const used = new Set(['premium']);
+  let anyBucket = false;
+  let anyOpen = false;
+
+  const cols = h('div', { class: 'cols' });
+  cols.appendChild(h('div', { class: 'ygrid', 'aria-hidden': 'true' }, ticks.map((t) => h('i', { style: { bottom: pct(t) + '%' } }, h('span', null, tickLabel(t))))));
+  const labels = h('div', { class: 'xlabels' });
+
+  plans.forEach((p) => {
+    const sc = p.scenarios[sKey];
+    const parts = sc.parts;
+    const dim = p.neverCheapest && priority !== 'paycheck';
+    const col = h('div', { class: 'col' + (dim ? ' dim' : ''), role: 'group', 'aria-label': `${p.name}, ${YEAR_WORDS[sKey]}` });
+    const bar = h('div', { class: 'bar-area' });
+    const hedge = p.atLeast && sKey !== 'bad' ? 'at least ' : '';
+
+    // The account: a wider box behind the care segments, as tall as what is set aside.
+    if (parts.account) {
+      anyBucket = true;
+      const acct = parts.account;
+      const bucket = h('div', { class: 'bucket', tabindex: '0', role: 'img', 'aria-label': accountWords(acct, ctx) });
+      place(bucket, `${p.id}:bucket`, pct(parts.premium), pct(acct.set));
+      attachTip(bucket, () => h('div', null, h('div', { class: 'tip-value' }, dollars(acct.gross)), h('div', { class: 'tip-label' }, `set aside in the ${acct.kind.toUpperCase()}, ${p.short}`), h('div', { class: 'tip-note' }, accountWords(acct, ctx))));
+      bar.appendChild(bucket);
+    }
+
+    // The solid stack.
+    let y = 0;
+    let topSeg = null;
+    for (const [key, name] of SEGMENTS) {
+      const v = parts[key];
+      if (!(v > 0.5)) continue;
+      used.add(key);
+      const seg = h('div', { class: `seg seg-${key}`, tabindex: '0', role: 'img', 'aria-label': `${p.name}, ${YEAR_WORDS[sKey]}, ${name}: ${dollars(v)}` }, px(v) >= 19 ? h('span', null, dollars(v)) : null);
+      place(seg, `${p.id}:${key}`, pct(y), pct(v));
+      attachTip(seg, () => segTip(p, sKey, key, name, v, ctx));
+      bar.appendChild(seg);
+      y += v;
+      topSeg = seg;
+    }
+    // Whatever depends on a plan fact the guide leaves open sits on top, hatched.
+    if (sc.hi - sc.lo >= 1) {
+      anyOpen = true;
+      const seg = h('div', { class: 'seg seg-open', tabindex: '0', role: 'img', 'aria-label': `${p.name}: up to ${dollars(sc.hi - sc.lo)} more, depending on an open plan question` });
+      place(seg, `${p.id}:open`, pct(sc.lo), pct(sc.hi - sc.lo));
+      attachTip(seg, () => h('div', null, h('div', { class: 'tip-value' }, `up to ${dollars(sc.hi - sc.lo)} more`), h('div', { class: 'tip-label' }, `${p.short}: depends on a plan fact`), h('div', { class: 'tip-note' }, p.open.map((u) => u.text).join('; '))));
+      bar.appendChild(seg);
+      topSeg = seg;
+    }
+    if (topSeg) topSeg.classList.add('cap');
+
+    // The dashed outline, on up to the worst case.
+    const solidTop = sc.hi;
+    const ceil = p.scenarios.ceiling.hi;
+    const gap = Math.max(0, ceil - solidTop);
+    const outline = h('div', { class: 'outline' + (priority === 'protect' ? ' emph' : ''), tabindex: '0', role: 'img', 'aria-label': `${p.name}: worst case ${dollars(ceil)}${p.noCeiling ? ' or more' : ''}` });
+    place(outline, `${p.id}:outline`, pct(solidTop), pct(gap));
+    attachTip(outline, () =>
+      h(
+        'div',
+        null,
+        h('div', { class: 'tip-value' }, dollarsRange(p.scenarios.ceiling) + (p.noCeiling ? '+' : '')),
+        h('div', { class: 'tip-label' }, `${p.short}: worst case`),
+        h('div', { class: 'tip-note' }, p.noCeiling ? 'every cap reached, plus the charges no cap covers' : 'premiums plus the out-of-pocket cap: the most this plan can cost you in a year'),
+        gap > 0.5 ? h('div', { class: 'tip-note' }, `${dollars(gap)} above the ${YEAR_WORDS[sKey]}`) : null
+      )
+    );
+    bar.appendChild(outline);
+
+    // Labels: the year's total, and the worst case. When the outline is too short to hold
+    // the total inside it, both sit above it.
+    // The total sits just above the solid stack (or above the account box, where that sticks
+    // out), inside the outline, on two lines when it is a range so it stays within the bar.
+    const bucketTop = parts.account ? parts.premium + parts.account.set : 0;
+    const anchor = Math.max(solidTop, bucketTop);
+    const ranged = sc.hi - sc.lo >= 1;
+    const twoLines = ranged || !!hedge;
+    const emphTotal = !(priority === 'protect' || priority === 'paycheck');
+    const roomy = px(ceil - anchor) >= (twoLines ? 2 : 1) * (emphTotal ? 20 : 17) + 14;
+    const totalText = (stacked) =>
+      !twoLines || !stacked ? [h('b', null, hedge + dollarsRange(sc))] : ranged ? [h('b', null, hedge + dollars(sc.lo) + ' to'), h('br'), h('b', null, dollars(sc.hi))] : [h('b', null, hedge.trim()), h('br'), h('b', null, dollars(sc.lo))];
+    const total = h('div', { class: 'tot' + (emphTotal ? ' emph' : '') }, totalText(roomy));
+    const worst = h('div', { class: 'worst' + (priority === 'protect' ? ' emph' : '') }, 'worst case ', h('b', null, dollars(ceil) + (p.noCeiling ? '+' : '')));
+    col.appendChild(bar);
+    if (roomy) {
+      place(total, `${p.id}:tot`, pct(anchor), null);
+      place(worst, `${p.id}:worst`, pct(ceil), null);
+      col.appendChild(total);
+      col.appendChild(worst);
+    } else {
+      const both = h('div', { class: 'tot-stack' }, worst, total);
+      place(both, `${p.id}:both`, pct(Math.max(ceil, anchor)), null);
+      col.appendChild(both);
+    }
+    cols.appendChild(col);
+
+    const pay = p.paycheck;
+    labels.appendChild(
+      h(
+        'div',
+        { class: 'xlabel' + (dim ? ' dim' : '') },
+        h('h3', null, p.name),
+        h(
+          'p',
+          { class: 'paycheck' + (priority === 'paycheck' ? ' emph' : '') },
+          h('b', null, dollars(pay.total)),
+          ' a paycheck',
+          ctx.view === 'takehome' ? h('small', null, ` (${dollars(pay.gross)} before tax)`) : null,
+          pay.election > 0 ? h('small', null, `, ${dollars(pay.grossElection)} of it to the ${pay.electionKind.toUpperCase()}`) : null
+        ),
+        p.neverCheapest ? h('p', { class: 'tag-never' }, 'never the cheapest') : null
+      )
+    );
+  });
+
+  // Legend: only what is on screen.
+  const key = (cls, text) => h('span', null, h('i', { class: `k ${cls}` }), text);
+  const legend = h('div', { class: 'mark-key' });
+  for (const [k, name] of SEGMENTS) if (used.has(k)) legend.appendChild(key(`k-seg seg-${k}`, name));
+  if (anyOpen) legend.appendChild(key('k-seg seg-open', 'Depends on an open plan question'));
+  if (anyBucket) legend.appendChild(key('k-bucket', 'Set aside in an FSA or HSA'));
+  legend.appendChild(key('k-outline', 'On up to the worst case'));
+
+  // Longer notes, by plan, under the chart.
+  const notes = [];
+  const note = (p, cls, ...body) => notes.push(h('li', { class: cls }, h('b', null, p.short + ': '), body));
+  for (const p of plans) {
+    const acct = p.scenarios[sKey].parts.account;
+    if (p.neverCheapest) note(p, 'flag-never', 'never the cheapest over a year for your answers.' + (p.smallestPaycheck ? ' It does have the smallest paycheck deduction.' : ''));
+    if (priority === 'paycheck' && ctx.canAbsorb === false && p.smallestPaycheck && plans.length > 1) {
+      note(
+        p,
+        'flag-warn',
+        `smallest deduction, and the largest possible early-year bill. You could owe up to ${dollars(p.deductibleOne)}${p.deductible > p.deductibleOne ? ` for one person (${dollars(p.deductible)} across the family)` : ''} before this plan pays for most care. You said a bill that size would be hard to absorb.`
+      );
+    }
+    if (acct) note(p, null, accountWords(acct, ctx));
+    if (p.atLeast) note(p, null, 'shown as "at least". Someone is at their out-of-pocket cap this year, so their care beyond the cap left no trace. Saying which month they hit it sharpens this.');
+    if (p.noCeiling) note(p, null, 'the worst case counts both caps and the extras from the care you described, but there is no true ceiling: charges the plan does not recognise are yours and count toward nothing.');
+    if (p.hsaBlocked) note(p, null, 'shown without the HSA tax benefit, because you are not eligible to contribute.');
+    if (p.open.length && p.scenarios[sKey].hi - p.scenarios[sKey].lo >= 1) note(p, null, 'a range, because ' + p.open.map((u) => u.text).join('; and ') + '.');
+  }
+
+  return h(
+    'div',
+    { class: 'stack-chart' },
+    legend,
+    h('div', { class: 'plot' }, cols, labels),
+    h('p', { class: 'axis-title' }, `total for the ${YEAR_WORDS[sKey]}, ${ctx.viewLabel}`),
+    notes.length ? h('ul', { class: 'plan-notes' }, notes) : null
+  );
+}
+
+function accountWords(acct, ctx) {
+  const name = acct.kind.toUpperCase();
+  let s = `${dollars(acct.gross)} set aside in the ${name}`;
+  if (ctx.view === 'takehome' && Math.abs(acct.set - acct.gross) > 0.5) s += ` (${dollars(acct.set)} of take-home pay)`;
+  if (acct.leftover < 0.5) return s + ". This year's care uses all of it.";
+  s += `. This year's care uses ${dollars(acct.used)}; ${dollars(acct.leftover)} is left over.`;
+  if (acct.kind === 'hsa') return s + ' It stays yours and is not counted as a cost.';
+  if (acct.forfeited > 0.5) return s + ` ${dollars(acct.rolled)} rolls into next year and ${dollars(acct.forfeited)} is lost, which is counted.`;
+  return s + ' It rolls into next year and is not counted as a cost.';
+}
+
+function segTip(p, sKey, key, name, v, ctx) {
+  const box = h('div', null, h('div', { class: 'tip-value' }, dollars(v)), h('div', { class: 'tip-label' }, h('i', { class: `k k-seg seg-${key}` }), `${name}, ${p.short}`));
+  const about = {
+    premium: `${dollars(p.paycheck.premium)} a paycheck, whatever the year brings` + (ctx.view === 'takehome' ? '. Shown after tax' : ''),
+    ded: 'what you pay in full before the plan starts sharing costs',
+    cc: 'flat copays, and your share of bills once the deductible is met',
+    extra: 'out-of-network charges above what the plan recognises, and care it does not cover',
+    lost: "FSA money beyond this year's care and the carryover limit",
+  }[key];
+  box.appendChild(h('div', { class: 'tip-note' }, about));
+  const acct = p.scenarios[sKey].parts.account;
+  if (acct && acct.used > 0.5 && ctx.view === 'takehome' && key !== 'premium' && key !== 'lost') {
+    box.appendChild(h('div', { class: 'tip-note' }, `${dollars(acct.used)} of this year's care is paid from the ${acct.kind.toUpperCase()} with untaxed money, so it takes less out of your pay than its face value`));
+  }
+  const what = { quiet: 'recurring care only, no one-offs', expected: 'the year your answers describe', bad: 'the expected year plus ' + (ctx.seriousLabel || 'one serious event') }[sKey];
+  box.appendChild(h('div', { class: 'tip-note' }, `${YEAR_WORDS[sKey]}: ${what}`));
   return box;
 }
 
-// Keep labels inside their row and stop the two end labels from running into each other.
-function fitLabels(root) {
-  for (const wrap of root.querySelectorAll('.track-wrap')) {
-    const w = wrap.getBoundingClientRect();
-    const lab = wrap.querySelector('.lab-top');
-    if (lab) {
-      lab.style.transform = 'translateX(-50%)';
-      const r = lab.getBoundingClientRect();
-      let shift = 0;
-      if (r.left < w.left) shift = w.left - r.left;
-      else if (r.right > w.right) shift = w.right - r.right;
-      lab.style.transform = `translateX(calc(-50% + ${shift}px))`;
-    }
-  }
-  for (const ends of root.querySelectorAll('.ends')) {
-    ends.classList.remove('stack');
-    const w = ends.getBoundingClientRect();
-    const a = ends.querySelector('.end-lo');
-    const b = ends.querySelector('.end-hi');
-    a.style.transform = '';
-    b.style.transform = 'translateX(-100%)';
-    let ra = a.getBoundingClientRect();
-    let rb = b.getBoundingClientRect();
-    if (ra.right > w.right) a.style.transform = `translateX(${w.right - ra.right}px)`;
-    if (rb.left < w.left) b.style.transform = `translateX(calc(-100% + ${w.left - rb.left}px))`;
-    ra = a.getBoundingClientRect();
-    rb = b.getBoundingClientRect();
-    if (ra.right + 10 > rb.left) ends.classList.add('stack');
-  }
-}
-
 // ---- break-even ----------------------------------------------------------------------------
+// Plans are told apart by line style and direct labels here: colour already means the
+// kind of money in the chart above.
+const DASHES = ['none', '7 4', '2 4', '10 3 2 3', '1 5', '12 4'];
+const lineKey = (i) => h('svg', { class: 'linekey-svg', width: 26, height: 8, viewBox: '0 0 26 8', 'aria-hidden': 'true' }, h('line', { class: 'line', x1: 1, x2: 25, y1: 4, y2: 4, 'stroke-dasharray': DASHES[i % DASHES.length] }));
+
 function breakEvenChart(be, out, ctx) {
   const W = Math.max(320, ctx.width || 560);
   const H = 250;
@@ -267,25 +323,26 @@ function breakEvenChart(be, out, ctx) {
   const dimmed = new Set(out.plans.filter((p) => p.neverCheapest && ctx.priority !== 'paycheck').map((p) => p.id));
   const ends = [];
   be.series.forEach((s, i) => {
-    const color = `var(--s${(i % 6) + 1})`;
+    const dash = DASHES[i % DASHES.length];
     const cls = dimmed.has(s.id) ? ' dim' : '';
     if (s.points.some((p) => p.hi - p.lo > 1)) {
       const up = s.points.map((p) => `${X(p.k)},${Y(p.hi)}`);
       const down = s.points.map((p) => `${X(p.k)},${Y(p.lo)}`).reverse();
-      svg.appendChild(h('polygon', { class: 'band' + cls, points: up.concat(down).join(' '), style: { fill: color } }));
+      svg.appendChild(h('polygon', { class: 'band' + cls, points: up.concat(down).join(' ') }));
     }
-    svg.appendChild(h('polyline', { class: 'line' + cls, points: s.points.map((p) => `${X(p.k)},${Y(p.mid)}`).join(' '), style: { stroke: color } }));
+    svg.appendChild(h('polyline', { class: 'line' + cls, points: s.points.map((p) => `${X(p.k)},${Y(p.mid)}`).join(' '), 'stroke-dasharray': dash }));
     const here = s.points.reduce((a, b) => (Math.abs(b.k - 1) < Math.abs(a.k - 1) ? b : a));
-    svg.appendChild(h('circle', { class: 'dot' + cls, cx: X(here.k), cy: Y(here.mid), r: 4.5, style: { fill: color } }));
+    svg.appendChild(h('circle', { class: 'dot' + cls, cx: X(here.k), cy: Y(here.mid), r: 4.5 }));
     const last = s.points[s.points.length - 1];
-    ends.push({ y: Y(last.mid), label: s.short, color });
+    ends.push({ y: Y(last.mid), at: Y(last.mid), label: s.short });
   });
-  // End labels only where they do not collide; the legend carries the rest.
+  // Direct labels at the line ends, spread apart where the lines finish close together.
   ends.sort((a, b) => a.y - b.y);
-  ends.forEach((e, i) => {
-    const clash = (i > 0 && e.y - ends[i - 1].y < 13) || (i < ends.length - 1 && ends[i + 1].y - e.y < 13);
-    if (!clash) svg.appendChild(h('text', { class: 'endlabel', x: m.l + iw + 8, y: e.y + 4 }, e.label));
-  });
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 14) ends[i].y = ends[i - 1].y + 14;
+  for (const e of ends) {
+    if (Math.abs(e.y - e.at) > 1) svg.appendChild(h('line', { class: 'leader', x1: m.l + iw + 1, x2: m.l + iw + 7, y1: e.at, y2: e.y }));
+    svg.appendChild(h('text', { class: 'endlabel', x: m.l + iw + 9, y: e.y + 4 }, e.label));
+  }
 
   // Hover: a crosshair that snaps to the nearest step, one tooltip listing every plan.
   const cross = h('line', { class: 'cross', y1: m.t, y2: m.t + ih, x1: 0, x2: 0, visibility: 'hidden' });
@@ -303,7 +360,7 @@ function breakEvenChart(be, out, ctx) {
       .map((s, si) => ({ s, si, p: s.points[idx] }))
       .sort((a, b) => a.p.mid - b.p.mid);
     for (const { s, si, p } of rows) {
-      box.appendChild(h('div', { class: 'tip-row' }, h('i', { class: 'linekey', style: { background: `var(--s${(si % 6) + 1})` } }), h('b', null, dollarsRange(p)), ' ', s.short));
+      box.appendChild(h('div', { class: 'tip-row' }, lineKey(si), h('b', null, dollarsRange(p)), ' ', s.short));
     }
     const r = svg.getBoundingClientRect();
     showTip(box, r.left + (X(k) / W) * r.width, r.top + m.t);
@@ -333,7 +390,7 @@ function breakEvenChart(be, out, ctx) {
   const legend = h(
     'div',
     { class: 'legend' },
-    be.series.map((s, i) => h('span', null, h('i', { class: 'linekey', style: { background: `var(--s${(i % 6) + 1})` } }), s.name))
+    be.series.map((s, i) => h('span', null, lineKey(i), s.name))
   );
   return h('div', { class: 'be-wrap' }, legend, svg);
 }
@@ -353,4 +410,4 @@ function breakEvenSentence(be, out) {
   return s.replace(/\. ([a-z])/, (m0, c) => '. ' + c.toUpperCase());
 }
 
-module.exports = { rangeBars, fitLabels, breakEvenChart, breakEvenSentence, hideTip };
+module.exports = { stackedBars, breakEvenChart, breakEvenSentence, hideTip };

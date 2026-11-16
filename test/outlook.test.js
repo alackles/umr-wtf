@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { validateConfig, getPlan } = require('../src/plans.js');
 const { build, defaultAnswers, newPerson } = require('../src/household.js');
-const { evaluate, breakEven, yearCost, perPaycheck } = require('../src/outlook.js');
+const { evaluate, breakEven, yearCost, perPaycheck, breakdown } = require('../src/outlook.js');
 
 const config = validateConfig(require('../demo/plans.demo.json'));
 const near = (got, want, tol = 0.01) => assert.ok(Math.abs(got - want) <= tol, `got ${got}, want ${want}`);
@@ -109,7 +109,7 @@ test('family: tier, credits, surcharge, someone leaving and someone joining', ()
   near(byId(out, 'moss').paycheck.total, 345 + (60 * 12) / 26);
 });
 
-test('take-home view: premiums are pre-tax, care is not, FSA and HSA change that', () => {
+test('take-home view: premiums are pre-tax, care is not, unless it goes through an FSA or HSA', () => {
   const fern = getPlan(config, 'fern');
   const lichen = getPlan(config, 'lichen');
   const hh = { tierId: 'employee', credit: 0, taxRate: 0.3, fsa: 0, hsa: 0, hsaEligible: true, hsaLimit: 4300 };
@@ -117,15 +117,34 @@ test('take-home view: premiums are pre-tax, care is not, FSA and HSA change that
   near(yearCost(config, fern, hh, 1000, 'takehome'), 160 * 26 * 0.7 + 1000);
   // FSA of 800 against 1000 of care: 800 of it is pre-tax.
   near(yearCost(config, fern, { ...hh, fsa: 800 }, 1000, 'takehome'), 160 * 26 * 0.7 + 1000 - 0.3 * 800);
-  // FSA of 2200 against 1000 of care: 640 rolls over, 560 is lost.
+  // FSA of 2200 against 1000 of care: 640 rolls over, 560 is lost. Lost money is a cost in either view.
   near(yearCost(config, fern, { ...hh, fsa: 2200 }, 1000, 'takehome'), 160 * 26 * 0.7 + 0.7 * (2200 - 640));
-  // HSA: the tax saving arrives whatever the year brings.
-  near(yearCost(config, lichen, { ...hh, hsa: 2100 }, 0, 'takehome'), 80 * 26 * 0.7 - 0.3 * 2100);
+  near(yearCost(config, fern, { ...hh, fsa: 2200 }, 1000, 'raw'), 160 * 26 + 1000 + 560);
+  // HSA: care paid through it is pre-tax. Money set aside beyond the year's care is savings,
+  // not a cost and not a credit.
+  near(yearCost(config, lichen, { ...hh, hsa: 2100 }, 900, 'takehome'), 80 * 26 * 0.7 + 0.7 * 900);
+  near(yearCost(config, lichen, { ...hh, hsa: 2100 }, 2900, 'takehome'), 80 * 26 * 0.7 + 0.7 * 2100 + 800);
+  near(yearCost(config, lichen, { ...hh, hsa: 2100 }, 0, 'takehome'), 80 * 26 * 0.7);
   near(perPaycheck(config, fern, { ...hh, fsa: 1440 }, 'raw').total, 160 + 60);
 });
 
-test('HSA-ineligible household: the high-deductible plan is shown without the tax benefit', () => {
-  const a = single();
+test('the pieces of a year add up, and the account is a bucket care fills first', () => {
+  const fern = getPlan(config, 'fern');
+  const hh = { tierId: 'employee', credit: 0, taxRate: 0.3, fsa: 1100, hsa: 0, hsaEligible: true };
+  const b = breakdown(config, fern, hh, { ded: 400, cc: 280, extra: 0 }, 'takehome');
+  near(b.premium + b.ded + b.cc + b.extra + b.lost, b.total);
+  near(b.ded + b.cc, 0.7 * 680); // all of the care went through the account
+  near(b.account.set, 0.7 * 1100);
+  near(b.account.leftover, 420);
+  near(b.account.rolled, 420);
+  near(b.lost, 0);
+  const more = breakdown(config, fern, hh, { ded: 400, cc: 1300, extra: 0 }, 'takehome');
+  near(more.ded + more.cc, 0.7 * 1100 + 600); // the account empties; the rest is at face value
+  assert.strictEqual(breakdown(config, fern, { ...hh, fsa: 0 }, { ded: 1, cc: 1, extra: 0 }, 'raw').account, null);
+});
+
+test('HSA-ineligible household: the high-deductible plan is shown without the HSA tax benefit', () => {
+  const a = single({ usage: 'counts', counts: { office: 0, therapy: 0, urgent: 0, er: 0 }, dedMet: 400, oopMet: 400 + 0.15 * 2100 });
   a.adv.hsa = 2900;
   const eligible = evaluate(config, build(config, a));
   a.gates.hsa = true;
@@ -134,7 +153,9 @@ test('HSA-ineligible household: the high-deductible plan is shown without the ta
   assert.strictEqual(hh.hsaEligible, false);
   const blocked = evaluate(config, hh);
   assert.strictEqual(byId(blocked, 'lichen').hsaBlocked, true);
-  near(byId(blocked, 'lichen').scenarios.floor.lo - byId(eligible, 'lichen').scenarios.floor.lo, 0.3 * 2900);
+  // 2500 of charges, all under that plan's deductible: paid pre-tax when eligible, at face value when not.
+  near(byId(blocked, 'lichen').scenarios.expected.lo - byId(eligible, 'lichen').scenarios.expected.lo, 0.3 * 2500, 1);
+  assert.strictEqual(byId(blocked, 'lichen').scenarios.expected.parts.account, null);
 });
 
 test('"never the cheapest": judged on yearly totals, with the paycheck noted separately', () => {
@@ -149,6 +170,21 @@ test('"never the cheapest": judged on yearly totals, with the paycheck noted sep
   assert.strictEqual(t.more, 'fern');
   near(t.perPaycheck, 140 - 105);
   near(t.worstCase, 105 * 26 + 3300 - (140 * 26 + 1800));
+});
+
+test('every scenario comes with its pieces, and they add up to its cost', () => {
+  const a = single({ usage: 'counts', counts: { office: 6, therapy: 0, urgent: 1, er: 1 }, dedMet: 400, oopMet: 1300 });
+  a.adv.fsa = 900;
+  for (const view of ['raw', 'takehome']) {
+    for (const p of evaluate(config, build(config, a), { view }).plans) {
+      for (const s of ['floor', 'quiet', 'expected', 'bad', 'ceiling']) {
+        const b = p.scenarios[s].parts;
+        near(b.premium + b.ded + b.cc + b.extra + b.lost, p.scenarios[s].lo);
+      }
+      near(p.scenarios.floor.parts.premium, p.scenarios.floor.lo - p.scenarios.floor.parts.lost);
+      assert.ok(p.scenarios.ceiling.lo >= p.scenarios.bad.hi - 0.01);
+    }
+  }
 });
 
 test('unknown plan facts widen a plan into a range', () => {

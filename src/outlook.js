@@ -36,31 +36,45 @@ function election(config, plan, hh) {
   return { kind: null, amount: 0, periods: config.payPeriods.premium };
 }
 
-// What a year costs, given what the household pays for care (`care`).
-//   raw:       premiums + care
-//   take-home: premiums are pre-tax, so they cost (1 - t) each. Care is paid from taxed money
-//              unless it goes through an FSA or HSA.
-//     FSA of E: the first E of care is pre-tax. Unspent money rolls over up to the carryover
-//               limit and is lost beyond it.
-//     HSA of H: saves t x H whatever the year brings (the money stays yours).
-function yearCost(config, plan, hh, care, view) {
-  const prem = premiumYear(config, plan, hh);
+// What a year costs, split into the pieces the chart stacks.
+//   care: { ded, cc, extra }  deductible; copays and coinsurance; charges no cap covers
+//   raw view:       every dollar at face value
+//   take-home view: premiums are pre-tax, so they cost (1 - t) each. Care is paid from taxed
+//                   money unless it goes through an FSA or HSA, in which case those dollars
+//                   cost (1 - t) too.
+// The account is a bucket that care fills first. Money set aside beyond the year's care is
+// not a cost: HSA money stays yours, FSA money rolls over up to the carryover limit. FSA
+// money beyond that limit is lost, and that is a cost.
+function breakdown(config, plan, hh, care, view) {
+  const k = view === 'raw' ? 1 : 1 - (hh.taxRate || 0);
+  const premium = premiumYear(config, plan, hh) * k;
+  const C = care.ded + care.cc + care.extra;
   const el = election(config, plan, hh);
   const employer = plan.account === 'hsa' && config.hsa && hh.hsaEligible ? config.hsa.employerContribution || 0 : 0;
-  if (view === 'raw') return prem + care - employer;
-  const t = hh.taxRate || 0;
-  let careCost = care;
-  if (el.kind === 'fsa' && el.amount > 0) {
-    const E = el.amount;
-    if (care >= E) careCost = care - t * E;
-    else {
-      const rolled = Math.min(config.fsa.carryover || 0, E - care);
-      careCost = (1 - t) * (E - rolled);
-    }
-  } else if (el.kind === 'hsa' && el.amount > 0) {
-    careCost = care - t * el.amount;
+  const free = Math.min(employer, C); // an employer's contribution pays first, at no cost to you
+  const used = Math.min(el.amount, C - free); // your own account dollars spent on care
+  const careCost = used * k + (C - free - used);
+  const leftover = el.amount - used;
+  let rolled = 0;
+  let forfeited = 0;
+  if (el.kind === 'fsa') {
+    rolled = Math.min(config.fsa.carryover || 0, leftover);
+    forfeited = leftover - rolled;
   }
-  return prem * (1 - t) + careCost - employer;
+  const f = C > 0 ? careCost / C : 0;
+  return {
+    premium,
+    ded: care.ded * f,
+    cc: care.cc * f,
+    extra: care.extra * f,
+    lost: forfeited * k,
+    total: premium + careCost + forfeited * k,
+    account: el.amount > 0 ? { kind: el.kind, set: el.amount * k, gross: el.amount, used, leftover, rolled, forfeited } : null,
+  };
+}
+
+function yearCost(config, plan, hh, care, view) {
+  return breakdown(config, plan, hh, { ded: 0, cc: care, extra: 0 }, view).total;
 }
 
 function perPaycheck(config, plan, hh, view) {
@@ -130,16 +144,27 @@ function evaluate(config, hh, opts = {}) {
       // ceiling, and the page says so.
       const cap = ceiling(v.plan, family) + (anyOut ? (family ? v.plan.out.oop[1] : v.plan.out.oop[0]) : 0) + bad.uncapped;
       const care = { floor: 0, quiet: quiet.memberTotal, expected: expected.memberTotal, bad: bad.memberTotal, ceiling: cap };
+      const split = (r) => ({ ded: r.parts.ded, cc: r.parts.copay + r.parts.coins, extra: r.uncapped });
+      const parts = {
+        floor: breakdown(config, v.plan, hh, { ded: 0, cc: 0, extra: 0 }, view),
+        quiet: breakdown(config, v.plan, hh, split(quiet), view),
+        expected: breakdown(config, v.plan, hh, split(expected), view),
+        bad: breakdown(config, v.plan, hh, split(bad), view),
+        ceiling: breakdown(config, v.plan, hh, { ded: 0, cc: cap, extra: 0 }, view),
+      };
       const cost = {};
-      for (const s of SCENARIOS) cost[s] = yearCost(config, v.plan, hh, care[s], view);
+      for (const s of SCENARIOS) cost[s] = parts[s].total;
       const atLeast = (hh.lowerBound || []).some((id) => !expected.capped[id]);
-      return { assumptions: v.assumptions, plan: v.plan, care, cost, expected, quiet, bad, badPerson, atLeast };
+      return { assumptions: v.assumptions, plan: v.plan, care, cost, parts, expected, quiet, bad, badPerson, atLeast };
     });
 
     const scenarios = {};
     for (const s of SCENARIOS) {
       scenarios[s] = range(per.map((v) => v.cost[s]));
       scenarios[s].care = range(per.map((v) => v.care[s]));
+      // The stack drawn for this scenario is the cheapest variant's; anything above it, up
+      // to the dearest variant, depends on a plan fact the guide leaves open.
+      scenarios[s].parts = per.reduce((a, v) => (v.cost[s] < a.cost[s] ? v : a)).parts[s];
     }
     return {
       id: plan.id,
@@ -232,4 +257,4 @@ function breakEven(config, hh, opts = {}) {
   return { ks, series, crossings, maxK, cheapestAtEstimate: cheapestAt(1), cheapestAtZero: cheapestAt(0) };
 }
 
-module.exports = { evaluate, breakEven, yearCost, perPaycheck, premiumYear, election, scaled, SCENARIOS, SCENARIO_LABELS, JUDGED };
+module.exports = { evaluate, breakEven, yearCost, breakdown, perPaycheck, premiumYear, election, scaled, SCENARIOS, SCENARIO_LABELS, JUDGED };
