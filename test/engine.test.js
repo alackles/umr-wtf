@@ -29,10 +29,10 @@ test('copay is never more than the allowed amount, and is charged per count', ()
 });
 
 test('deductible then coinsurance', () => {
-  const r = replay([item('a', 2, 'ded_coins', 1400)], fern, { family: false });
+  const r = replay([item('a', 2, 'ded_coins', 1600)], fern, { family: false });
   near(r.parts.ded, 400);
-  near(r.parts.coins, 150);
-  near(r.total, 550);
+  near(r.parts.coins, 180);
+  near(r.total, 580);
 });
 
 test('one member at the cap: later care costs nothing, including copays', () => {
@@ -53,13 +53,13 @@ test('family deductible binding: third person owes coinsurance only', () => {
   const items = [
     item('a', 1, 'ded_coins', 600),
     item('b', 2, 'ded_coins', 600),
-    item('c', 3, 'ded_coins', 1000),
+    item('c', 3, 'ded_coins', 1300),
   ];
   const r = replay(items, fern, { family: true });
   near(r.acc.in.fded, 800);
   near(r.acc.in.ded.c || 0, 0);
-  near(r.byPerson.c.in, 150); // 15% of 1000, no deductible left to pay
-  near(r.total, 400 + 30 + 400 + 30 + 150);
+  near(r.byPerson.c.in, 195); // 15%, no deductible left to pay
+  near(r.total, 400 + 30 + 400 + 30 + 195);
 });
 
 test('family cap binding stops a person short of their own cap', () => {
@@ -71,12 +71,12 @@ test('family cap binding stops a person short of their own cap', () => {
 });
 
 test('pooled deductible: no per-person limit inside the family deductible', () => {
-  const r = replay([item('a', 1, 'ded_coins', 3500), item('b', 2, 'ded_coins', 3500)], lichen, { family: true });
-  near(r.acc.in.ded.a, 3500); // past the individual figure: it does not apply when pooled
-  near(r.acc.in.ded.b, 2100);
-  near(r.parts.coins, 0.25 * 1400);
+  const r = replay([item('a', 1, 'ded_coins', 3300), item('b', 2, 'ded_coins', 3300)], lichen, { family: true });
+  near(r.acc.in.ded.a, 3300); // past the individual figure: it does not apply when pooled
+  near(r.acc.in.ded.b, 2300);
+  near(r.parts.coins, 0.25 * 1000);
   // Alone on the plan, the individual deductible applies instead.
-  near(replay([item('a', 1, 'ded_coins', 3500)], lichen, { family: false }).parts.ded, 2800);
+  near(replay([item('a', 1, 'ded_coins', 3300)], lichen, { family: false }).parts.ded, 2800);
 });
 
 test('out-of-network: separate accumulators, and the excess over allowed has no cap', () => {
@@ -92,7 +92,7 @@ test('out-of-network: separate accumulators, and the excess over allowed has no 
   // A year of weekly out-of-network visits: the counted part stops at the out-of-network cap,
   // the excess keeps going.
   const year = [];
-  for (let m = 1; m <= 12; m++) year.push(item('a', m, 'office', 2000, { network: 'out', billed: 2600, count: 4 }));
+  for (let m = 1; m <= 12; m++) year.push(item('a', m, 'office', 2200, { network: 'out', billed: 2800, count: 4 }));
   const y = replay(year, fern, { family: false });
   near(y.total, 3900);
   near(y.uncapped, 600 * 12);
@@ -100,10 +100,10 @@ test('out-of-network: separate accumulators, and the excess over allowed has no 
 
 test('brand-name prescriptions: flat copays on a copay plan, full price to the deductible on the other', () => {
   const fills = [];
-  for (let m = 1; m <= 12; m++) fills.push(item('a', m, 'rx_preferred', 400));
+  for (let m = 1; m <= 12; m++) fills.push(item('a', m, 'rx_preferred', 450));
   near(replay(fills, fern, { family: false }).total, 12 * 40);
-  // 2800 of deductible, then 25% of the remaining 2000
-  near(replay(fills, lichen, { family: false }).total, 2800 + 0.25 * 2000);
+  // 2800 of deductible, then 25% of the rest
+  near(replay(fills, lichen, { family: false }).total, 2800 + 0.25 * 2600);
 });
 
 test('specialty prescription: coinsurance with a floor and a ceiling per fill', () => {
@@ -138,10 +138,10 @@ test('unknowns expand into variants only where they matter', () => {
   assert.strictEqual(variants.length, 2);
   assert.strictEqual(open.length, 1);
   const fills = [];
-  for (let m = 1; m <= 12; m++) fills.push(item('a', m, 'rx_generic', 100));
+  for (let m = 1; m <= 12; m++) fills.push(item('a', m, 'rx_generic', 90));
   const totals = variants.map((v) => replay(fills, v.plan, { family: false }).total);
-  near(totals[0], 1200);
-  near(totals[1], 300);
+  near(totals[0], 1080);
+  near(totals[1], 270);
 });
 
 test('premium lookup and tiers', () => {
