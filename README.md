@@ -20,9 +20,13 @@ Content-Security-Policy that tells the browser to block any.
 | `src/household.js` | Questionnaire answers, or an imported table, to line items |
 | `src/outlook.js` | Scenarios, take-home and raw views, the never-cheapest rule, break-even |
 | `src/importer.js` | CSV and JSON import |
+| `src/prompt.js` | The agent prompts for the real-claims path, written from the plan configuration |
+| `src/report.js` | The results as plain text |
 | `src/seal.js` | Encrypts and decrypts the plan data (WebCrypto: PBKDF2-SHA-256, AES-GCM) |
 | `src/ui/` | The page |
 | `demo/plans.demo.json` | Invented plans, for the demo build and the tests |
+| `demo/make-eobs.js` | Writes a made-up household's year of EOBs, with the right answer |
+| `demo/score-table.js` | Marks a table an agent made from those EOBs against the answer |
 | `build.js` | Builds the single file |
 | `seal.js` | Seals a plan configuration with a passphrase, for the public site |
 | `site/plans.sealed.json` | The sealed plan data the public site is built from |
@@ -32,6 +36,23 @@ Content-Security-Policy that tells the browser to block any.
     npm test            # node --test, no dependencies (Node 18+)
     npm run build       # demo plans -> dist/index.html
     node build.js --config path/to/plans.json --out path/to/page.html
+
+## Trying the agent prompts without real records
+
+The real-claims path asks an AI agent to turn a year of EOBs into a table. To see how a
+particular agent does, without giving it anyone's medical documents:
+
+    node demo/make-eobs.js --pdf        # 35 invented EOBs -> dist/eobs/txt and dist/eobs/pdf, plus answer.csv
+    npm run build                       # the demo page, whose prompts match those EOBs
+
+Open `dist/index.html`, choose "Use real claims" and "Hand them to an AI agent", copy the
+prompt, and give it to the agent with the EOBs. Save the table it returns and mark it:
+
+    node demo/score-table.js agent-table.csv
+
+The invented year holds the cases that are easy to get wrong: a lab that rides on an office
+visit, an ER visit billed as two claims, a row that was not covered, an out-of-network
+visit, a reprocessed claim, and someone who reaches their out-of-pocket limit.
 
 ## The public site
 
