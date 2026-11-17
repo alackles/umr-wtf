@@ -175,8 +175,8 @@ function renderForm() {
       { class: 'modes', role: 'group', 'aria-label': 'How to fill this in' },
       choice(
         [
-          { value: 'A', label: 'Answer a few questions', sub: 'From memory and two numbers per person. For everyone.' },
-          { value: 'B', label: 'Use real claims', sub: 'A table of line items, usually made by an AI agent from your EOBs.' },
+          { value: 'A', label: 'Answer a few questions', sub: 'Manual input from your own prior-year estimates.' },
+          { value: 'B', label: 'Use real claims', sub: '(Optionally AI-agent assisted) calculation from last year\'s EOBs.' },
         ],
         S.mode,
         (v) => {
@@ -285,7 +285,7 @@ function peopleSection(n, a, current) {
   return section(
     n,
     'Who is covered',
-    S.mode === 'B' ? 'Names here have to match the names in your table. Say who each person is so the premium tier is right.' : 'Names are optional and stay on this page. The ticks say who is on the plan each year: if someone is joining or leaving, untick the year they are not on it.',
+    S.mode === 'B' ? 'Names here have to match the names in your table. Say who each person is so the premium tier is right.' : 'Names are optional and sent nowhere.',
     h('div', { id: 'q-people', class: 'people' }, rows),
     h(
       'div',
@@ -563,7 +563,7 @@ function gatesSection(n, a, current, onPlan, next) {
   return section(
     n,
     'Additional considerations',
-    'Common, not universal, and each one changes the numbers a lot. Each "yes" opens a few more boxes. Each "no" is taken at its word and listed under the chart.',
+    'Common kinds of care that change the calculation by a lot.',
     gate(a, 'rx', 'Does anyone take regular prescriptions?', rxPanel),
     gate(a, 'regular', h('span', null, 'Does anyone get regular care that isn\'t an office visit?', h('span', { class: 'gate-sub' }, 'Infusions, scans, dialysis, lab work billed on its own.')), regularPanel),
     gate(a, 'oon', 'Does anyone see a provider who doesn\'t take your insurance?', oonPanel)
@@ -792,8 +792,8 @@ function accountsSection(n, a, next) {
     h(
       'div',
       { class: 'pair', id: 'q-accounts' },
-      fsaPlans.length ? field(`FSA election (${fsaPlans.map((p) => p.short).join(', ')})`, numberBox(adv, 'fsa', { prefix: '$', placeholder: '0', max: config.fsa.limit, aria: 'FSA election' }), `Up to ${dollars(config.fsa.limit)} a year. What bills do not use can go to other eligible things, such as over-the-counter medicine; ${dollars(config.fsa.carryover)} can carry into next year.`) : null,
-      hsaPlans.length && !hsaBlocked ? field(hsaLabel, numberBox(adv, 'hsa', { prefix: '$', placeholder: '0', max: hsaMax, aria: 'HSA contribution' }), `Up to ${dollars(hsaMax)} a year for your tier. The money stays yours.`) : null,
+      fsaPlans.length ? field(`FSA election (${fsaPlans.map((p) => p.short).join(', ')})`, numberBox(adv, 'fsa', { prefix: '$', placeholder: '0', max: config.fsa.limit, aria: 'FSA election' }), `Up to ${dollars(config.fsa.limit)} a year. Up to ${dollars(config.fsa.carryover)} can carry into next year.`) : null,
+      hsaPlans.length && !hsaBlocked ? field(hsaLabel, numberBox(adv, 'hsa', { prefix: '$', placeholder: '0', max: hsaMax, aria: 'HSA contribution' }), `Up to ${dollars(hsaMax)} a year for your tier. Money never expires.`) : null,
       hsaPlans.length && hsaBlocked ? h('div', { class: 'field' }, h('span', { class: 'field-label' }, hsaLabel), h('span', { class: 'hint' }, 'Not open to you, from your answer below.')) : null
     ),
     hsaPlans.length ? gate(a, 'hsa', 'Is anyone on Medicare, or does your spouse have their own FSA?', hsaPanel(a)) : null
@@ -1354,7 +1354,7 @@ function start(rawConfig) {
     h(
       'header',
       { class: 'top' },
-      h('div', { class: 'brand' }, h('h1', null, 'umr-wtf'), h('p', { class: 'tagline' }, 'Which medical plan? Your numbers, the trade-offs, no verdict.')),
+      h('div', { class: 'brand' }, h('h1', null, 'umr-wtf'), h('p', { class: 'tagline' }, 'AHHH there\'s so many numbers!!!! Help  me!!')),
       h(
         'div',
         { class: 'badges' },
@@ -1369,7 +1369,7 @@ function start(rawConfig) {
     )
   );
   app.appendChild(
-    h('p', { class: 'lede' }, `For ${config.audience || 'people'} choosing between ${config.plans.map((p) => p.name).join(', ').replace(/, ([^,]*)$/, ' and $1')} for ${config.planYear}. Everyone wants to pay as little as possible for as much protection as possible; people differ in where they sit on that trade. So this shows you your trade, and flags any plan that is not the cheapest in any year it shows.`)
+    h('p', { class: 'lede' }, `For ${config.audience || 'people'} choosing between ${config.plans.map((p) => p.name).join(', ').replace(/, ([^,]*)$/, ' and $1')} for ${config.planYear}.`)
   );
   formEl = h('form', { class: 'form', onsubmit: (e) => e.preventDefault(), novalidate: true });
   resultsEl = h('div', { class: 'results', 'aria-live': 'polite' });
