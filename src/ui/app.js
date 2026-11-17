@@ -188,6 +188,17 @@ function renderForm() {
     )
   );
 
+  if (S.mode === 'B') {
+    formEl.appendChild(
+      h(
+        'div',
+        { class: 'alert path-alert' },
+        h('b', null, 'PROCEED WITH CAUTION.'),
+        ' This pathway assumes you want to download ALL of your family\'s medical information from the past year and feed it to an AI agent of your choice. In some cases this may be a logical thing to do (e.g., you have a complex medical situation AND you already have an AI agent tightly integrated into your personal life or are not worried about sending this information to a private tech company). However, you should be certain this is what you want to do before you do it. ',
+        h('b', null, 'If you aren\'t sure, use the other tab.')
+      )
+    );
+  }
   formEl.appendChild(peopleSection(n++, a, current));
   if (S.mode === 'A') {
     formEl.appendChild(thisYearSection(n++, a, current, onPlan));
@@ -319,7 +330,6 @@ function thisYearSection(n, a, current, onPlan) {
   ];
   if (current) {
     body.push(
-      h('p', { class: 'hint block' }, config.hints && config.hints.accumulators),
       field(
         'These numbers are as of',
         h('input', {
@@ -346,7 +356,6 @@ function thisYearSection(n, a, current, onPlan) {
             field('Deductible met', numberBox(p, 'dedMet', { prefix: '$', placeholder: '0', aria: `${p.name} deductible met` }), `out of ${dollars(current.in.ded[0])}`),
             field('Out-of-pocket met', numberBox(p, 'oopMet', { prefix: '$', placeholder: '0', aria: `${p.name} out-of-pocket met` }), `out of ${dollars(current.in.oop[0])}`)
           ),
-          h('p', { class: 'working', id: `work-${p.id}` }),
           h('div', { class: 'cap-slot', id: `cap-${p.id}` })
         )
       );
@@ -670,12 +679,7 @@ function importSection(n) {
     n,
     'Your line items',
     null,
-    h(
-      'div',
-      { class: 'notice' },
-      h('p', null, h('b', null, 'What this path means. '), 'You give a year of your family\'s medical documents to an AI agent, and it hands back a table. Which agent, and whose account, is your choice and your call. This page still sends nothing anywhere: the table is read here, in your browser.'),
-      h('p', { class: 'muted' }, 'The EOB downloader and the agent prompt are not built yet. Until they are, any table in the format below works, including one you type.')
-    ),
+    h('p', { class: 'hint block' }, 'The EOB downloader and the agent prompt are not built yet. Until they are, any table in the format below works, including one you type.'),
     box,
     h(
       'div',
@@ -915,7 +919,6 @@ function jump(anchor) {
 }
 
 function renderWorking(res) {
-  for (const el of formEl.querySelectorAll('.working')) clear(el);
   for (const el of formEl.querySelectorAll('.settle')) clear(el);
   // The cap-month box appears only for people at a cap. Left alone once drawn, so a
   // keyboard user moving through the months keeps focus.
@@ -937,18 +940,6 @@ function renderWorking(res) {
     }
   }
   if (!res.hh) return;
-  for (const w of res.hh.working) {
-    const el = document.getElementById(`work-${w.person}`);
-    if (!el) continue;
-    const bits = [`${dollars(w.dedMet)} deductible`];
-    if (w.copays > 0.5) bits.push(`${dollars(w.copays)} copays`);
-    if (w.knownCoins > 0.5) bits.push(`${dollars(w.knownCoins)} ER coinsurance`);
-    if (w.coinsurance > 0.5) bits.push(`${dollars(w.coinsurance)} coinsurance at ${Math.round(w.share * 100)}%`);
-    let text = `Read as ${bits.join(' + ')}. That is about ${dollars(w.charges)} of care billed through the deductible so far`;
-    if (w.recurring > 0.5) text += `, or ${dollars(w.recurring)} a year`;
-    text += w.censored ? (w.capMonth ? '. At the cap: projected from the months before it.' : '. At the cap, so this is a lower bound.') : '.';
-    el.textContent = text;
-  }
   // Inconsistent inputs: ask which to trust, right where the numbers are.
   for (const p of res.problems) {
     if (p.code !== 'copays-exceed' || !p.person) continue;
@@ -1354,23 +1345,13 @@ function start(rawConfig) {
     h(
       'header',
       { class: 'top' },
-      h('div', { class: 'brand' }, h('h1', null, 'umr-wtf'), h('p', { class: 'tagline' }, 'AHHH there\'s so many numbers!!!! Help  me!!')),
-      h(
-        'div',
-        { class: 'badges' },
-        h(
-          'details',
-          { class: 'badge' },
-          h('summary', null, 'Nothing leaves this page'),
-          h('p', null, 'This is one file. It makes no network requests, and your browser is told to block any it might try. Turn off wifi and it works the same. Answers live in this tab only and are gone when you close it.')
-        ),
-        h('details', { class: 'badge' }, h('summary', null, 'Unofficial'), h('p', null, (config.hints && config.hints.disclaimer) || 'Estimates only. The plan documents govern.'))
-      )
+      h('div', { class: 'brand' }, h('h1', null, 'umr-wtf'), h('p', { class: 'tagline' }, 'AHHH there\'s so many numbers!!!! Help  me!!'))
     )
   );
   app.appendChild(
     h('p', { class: 'lede' }, `For ${config.audience || 'people'} choosing between ${config.plans.map((p) => p.name).join(', ').replace(/, ([^,]*)$/, ' and $1')} for ${config.planYear}.`)
   );
+  if (config.hints && config.hints.alert) app.appendChild(h('p', { class: 'alert page-alert' }, config.hints.alert));
   formEl = h('form', { class: 'form', onsubmit: (e) => e.preventDefault(), novalidate: true });
   resultsEl = h('div', { class: 'results', 'aria-live': 'polite' });
   app.appendChild(h('main', { class: 'layout' }, formEl, h('aside', { class: 'results-col', id: 'results' }, resultsEl)));

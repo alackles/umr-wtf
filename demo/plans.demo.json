@@ -160,7 +160,7 @@
   "ruleNotes": ["Invented plans. Shapes differ on purpose so the tests cover copays, embedded and pooled deductibles, and an ER rule that skips the deductible."],
   "footnotes": ["This is the demonstration build. The numbers are invented."],
   "hints": {
-    "accumulators": "On a recent explanation of benefits, look for the lines that read \"$X out of $Y\": deductible first, then out-of-pocket, for the person and for the family.",
+    "alert": "ALERT! This is not an official tool of any employer. It is one person's frustration with medical bureaucracy distilled into a browser tool for their friends. It is not financial advice and it is not a substitute for talking to HR.",
     "disclaimer": "Demonstration data. Estimates only."
   }
 }

@@ -73,19 +73,6 @@ code { font-family: var(--mono); font-size: 0.92em; background: var(--sunk); pad
 .brand h1 { font-family: var(--mono); font-size: 28px; letter-spacing: -0.02em; line-height: 1.1; }
 .brand h1::after { content: "?"; color: var(--s2); }
 .tagline { color: var(--ink-2); margin-top: 2px; }
-.badges { display: flex; flex-wrap: wrap; gap: 8px; }
-.badge { position: relative; }
-.badge summary {
-  list-style: none; cursor: pointer; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line);
-  border-radius: 999px; background: var(--surface); color: var(--ink-2);
-}
-.badge summary::-webkit-details-marker { display: none; }
-.badge summary::before { content: "●"; color: var(--s3); font-size: 9px; vertical-align: 2px; margin-right: 6px; }
-.badge[open] p {
-  position: absolute; right: 0; top: calc(100% + 6px); width: min(340px, 86vw); z-index: 5; font-size: 13px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
-}
 .lede { max-width: 78ch; color: var(--ink-2); margin: 14px 0 18px; }
 
 /* ---- layout ---- */
@@ -161,8 +148,6 @@ label.btn { position: relative; }
 .person-row .check { font-size: 13px; }
 .person-row .role { color: var(--muted); font-size: 13px; }
 .derived { font-size: 14px; color: var(--ink-2); }
-.working { font-size: 12.5px; color: var(--ink-2); background: var(--sunk); border-radius: 6px; padding: 6px 8px; }
-.working:empty { display: none; }
 
 .gate { border-top: 1px solid var(--hair); padding-top: 10px; }
 .gate-q { display: flex; gap: 12px; justify-content: space-between; align-items: center; }
@@ -186,7 +171,9 @@ table.grid td { padding: 2px 10px 2px 0; }
 
 .problem { border: 1px solid var(--bad); border-radius: 8px; padding: 10px 12px; background: var(--surface); display: grid; gap: 8px; font-size: 14px; }
 .problem ul { margin: 0; padding-left: 18px; }
-.notice { background: var(--warn-wash); color: var(--ink); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; font-size: 14px; }
+.alert { background: var(--warn-wash); color: var(--ink); border: 2px solid var(--warn-ink); border-radius: 8px; padding: 12px 14px; font-size: 15px; line-height: 1.45; }
+.page-alert { max-width: 78ch; margin: -6px 0 18px; }
+.path-alert { margin-bottom: 14px; }
 .help summary { cursor: pointer; color: var(--accent); }
 .help ul { margin: 6px 0; padding-left: 18px; font-size: 13.5px; }
 .flash { animation: flash 1.4s ease-out; }
@@ -359,7 +346,7 @@ table.rows select { padding: 3px 2px; max-width: 132px; }
 @media print {
   :root { --page: #fff; --surface: #fff; }
   body { font-size: 12px; }
-  .form, .badges, .no-print, .toggle, .tip, .to-results, .priority .choice { display: none !important; }
+  .form, .no-print, .toggle, .tip, .to-results, .priority .choice { display: none !important; }
   .layout { display: block; }
   .results-col { position: static; max-height: none; overflow: visible; }
   .results { border: 0; padding: 0; }
