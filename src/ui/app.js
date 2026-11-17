@@ -663,7 +663,8 @@ function eventsSection(n, a, next) {
 // link to drag to the bookmarks bar, and as text to copy into the browser's console. The page
 // only shows the script. It runs on the administrator's site, never here. The steps for
 // reaching the right page there come from the configuration (claims.downloader.steps); one
-// written between ** and ** is set in bold.
+// written between ** and ** is set in bold. So does a paragraph on why a downloader is needed
+// at all (claims.downloader.why), shown under the first.
 function getEobsSection(n) {
   const words = claimsWording(config);
   const script = extras.downloader;
@@ -692,6 +693,7 @@ function getEobsSection(n) {
     n,
     'Get your EOBs',
     words.where,
+    words.downloader && words.downloader.why ? h('p', { class: 'intro' }, words.downloader.why) : null,
     h(
       'ol',
       { class: 'steps' },
@@ -717,7 +719,7 @@ function getEobsSection(n) {
         )
       )
     ),
-    h('p', null, 'The script runs in your own browser, in the session you logged in to. It asks for each EOB the way opening one by hand does, and sends nothing anywhere else.'),
+    h('p', null, 'The script just does what you would do manually by pretending to the browser that you\'re clicking on it.'),
     promptBlock('downloader', script, 'Read and copy the script', 'javascript', 'script')
   );
 }
