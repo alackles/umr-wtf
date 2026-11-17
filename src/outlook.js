@@ -202,4 +202,61 @@ function evaluate(config, hh, opts = {}) {
   return { view, family, tierId: hh.tierId, plans, trades };
 }
 
-module.exports = { evaluate, yearCost, breakdown, perPaycheck, premiumYear, election, SCENARIOS, SCENARIO_LABELS, JUDGED };
+// How far would the estimate have to be off before a different plan came out cheapest?
+// Scales the whole year's care from none to three times the estimate and notes where the
+// cheapest plan (by the middle of its range) changes.
+function sensitivity(config, hh, opts = {}) {
+  const view = opts.view || 'takehome';
+  const maxK = 3;
+  const step = 0.05;
+  const tier = getTier(config, hh.tierId);
+  const family = hh.family != null ? hh.family : tier.family;
+  const anyRx = hh.items.some((it) => /^rx_/.test(it.category));
+  const plans = config.plans.map((plan) => ({ id: plan.id, variants: expandVariants(plan, { family, rx: anyRx }).variants }));
+  const cheapestAt = (k) => {
+    const items = hh.items.map((it) =>
+      Object.assign({}, it, { allowed: it.allowed * k, count: (it.count == null ? 1 : it.count) * k, billed: it.billed == null ? undefined : it.billed * k })
+    );
+    let best = null;
+    for (const p of plans) {
+      const costs = p.variants.map((v) => yearCost(config, v.plan, hh, replay(items, v.plan, { family }).memberTotal, view));
+      const mid = (Math.min(...costs) + Math.max(...costs)) / 2;
+      if (!best || mid < best.mid - 1e-9) best = { id: p.id, mid };
+    }
+    return best.id;
+  };
+  const crossings = [];
+  let prev = null;
+  let atEstimate = null;
+  const n = Math.round(maxK / step);
+  for (let i = 0; i <= n; i++) {
+    const k = i * step;
+    const id = cheapestAt(k);
+    if (prev && id !== prev) crossings.push({ k: k - step / 2, from: prev, to: id }); // somewhere inside the step
+    if (i === Math.round(1 / step)) atEstimate = id;
+    prev = id;
+  }
+  const nothingToScale = !hh.items.some((it) => it.allowed > 0 && it.category !== 'preventive');
+  return { maxK, cheapestAtZero: crossings.length ? crossings[0].from : atEstimate, cheapestAtEstimate: atEstimate, crossings, nothingToScale };
+}
+
+// The same thing in a sentence. `short` maps a plan id to its short name.
+function sensitivitySentence(sens, short) {
+  const best = short(sens.cheapestAtEstimate);
+  if (sens.nothingToScale) return `Your estimate has no care in it beyond free checkups, so ${best} costs least. The bad year and the worst case show what happens if that changes.`;
+  if (!sens.crossings.length) return `${best} costs least however much care you end up using, from none to ${sens.maxK} times your estimate.`;
+  const below = sens.crossings.filter((c) => c.k <= 1).pop();
+  const above = sens.crossings.find((c) => c.k > 1);
+  const pct = (k) => Math.max(5, Math.round((Math.abs(k - 1) * 100) / 5) * 5);
+  const bits = [];
+  if (below) {
+    bits.push(below.k < 0.06 ? `${short(below.from)} would only cost less with almost no care at all` : `with about ${pct(below.k)}% less care than you estimated, ${short(below.from)} would cost less`);
+  }
+  if (above) {
+    bits.push(above.k >= 2 ? `with about ${above.k.toFixed(1).replace(/\.0$/, '')} times the care, ${short(above.to)} would` : `with about ${pct(above.k)}% more care, ${short(above.to)} would`);
+  }
+  const rest = bits.join('; ');
+  return `At your estimate ${best} costs least. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}.`;
+}
+
+module.exports = { evaluate, sensitivity, sensitivitySentence, yearCost, breakdown, perPaycheck, premiumYear, election, SCENARIOS, SCENARIO_LABELS, JUDGED };

@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { validateConfig, getPlan } = require('../src/plans.js');
 const { build, defaultAnswers, newPerson } = require('../src/household.js');
-const { evaluate, yearCost, perPaycheck, breakdown } = require('../src/outlook.js');
+const { evaluate, sensitivity, sensitivitySentence, yearCost, perPaycheck, breakdown } = require('../src/outlook.js');
 
 const config = validateConfig(require('../demo/plans.demo.json'));
 const near = (got, want, tol = 0.01) => assert.ok(Math.abs(got - want) <= tol, `got ${got}, want ${want}`);
@@ -209,6 +209,29 @@ test('out-of-network care: the worst case is marked as having no true ceiling', 
   assert.strictEqual(byId(out, 'fern').noCeiling, true);
   for (const p of out.plans) assert.ok(p.scenarios.ceiling.lo >= p.scenarios.bad.hi - 0.01, 'the worst case is never below the bad year');
   near(byId(out, 'fern').variants[0].expected.uncapped, 24 * 200 * 0.3, 0.5);
+});
+
+test('how far off the estimate could be: where the cheapest plan changes, and the sentence for it', () => {
+  const a = single({ usage: 'counts', counts: { office: 6, therapy: 0, urgent: 0, er: 0 }, dedMet: 400, oopMet: 400 + 120 + 0.15 * 2900 });
+  const hh = build(config, a);
+  const sens = sensitivity(config, hh, { view: 'raw' });
+  assert.strictEqual(sens.cheapestAtZero, 'lichen'); // with no care, the cheapest premium wins
+  assert.ok(sens.crossings.length >= 1);
+  assert.ok(sens.crossings.every((c, i) => i === 0 || c.k > sens.crossings[i - 1].k));
+  // The plan named at the estimate is the one the expected year says is cheapest.
+  const out = evaluate(config, hh, { view: 'raw' });
+  const cheapest = out.plans.reduce((x, y) => (y.scenarios.expected.lo < x.scenarios.expected.lo ? y : x));
+  assert.strictEqual(sens.cheapestAtEstimate, cheapest.id);
+  const short = (id) => out.plans.find((p) => p.id === id).short;
+  const text = sensitivitySentence(sens, short);
+  assert.match(text, new RegExp(`^At your estimate ${cheapest.short} costs least\\. `));
+  assert.match(text, /less care than you estimated|more care|times the care|almost no care/);
+  // No care to scale: nothing can change, and the sentence says so.
+  const none = sensitivity(config, build(config, single({ usage: 'counts', counts: { office: 0, therapy: 0, urgent: 0, er: 0 } })), { view: 'raw' });
+  assert.deepStrictEqual(none.crossings, []);
+  assert.strictEqual(none.nothingToScale, true);
+  assert.match(sensitivitySentence(none, short), /no care in it beyond free checkups/);
+  assert.match(sensitivitySentence({ ...sens, crossings: [] }, short), /costs least however much care/);
 });
 
 test('leaving mid-year: premiums and care for part of the year', () => {

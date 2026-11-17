@@ -5,7 +5,7 @@
 const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
 const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
-const { evaluate, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
+const { evaluate, sensitivity, sensitivitySentence, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, COLUMNS } = require('../importer.js');
 const { CATEGORIES } = require('../plans.js');
 const { stackedBars, hideTip } = require('./charts.js');
@@ -891,7 +891,7 @@ function compute() {
   if (problems.some((p) => p.blocking)) return { hh, problems };
   try {
     const view = S.answers.view === 'raw' ? 'raw' : 'takehome';
-    return { hh, problems, out: evaluate(config, hh, { view }) };
+    return { hh, problems, out: evaluate(config, hh, { view }), sens: sensitivity(config, hh, { view }) };
   } catch (e) {
     return { hh, problems: [{ blocking: true, text: `The table could not be replayed: ${e.message}` }] };
   }
@@ -1121,6 +1121,16 @@ function renderResults() {
       );
     }
   }
+
+  // How far off the estimate could be before a different plan cost least.
+  resultsEl.appendChild(
+    h(
+      'p',
+      { class: 'sens' },
+      h('b', null, 'If your estimate is off. '),
+      sensitivitySentence(res.sens, (id) => out.plans.find((p) => p.id === id).short)
+    )
+  );
 
   // The "assuming..." line.
   if (hh.assumptions.length) {
