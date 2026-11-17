@@ -5,14 +5,15 @@
 //
 //   node seal.js --config <plans.json> [--out site/plans.sealed.json]
 //
-// It asks for the passphrase twice, without echoing it. The passphrase is never taken from
+// Anything the configuration carries along (payload.js: a script for the page to show) is
+// sealed with it. It asks for the passphrase twice, without echoing it. The passphrase is never taken from
 // the command line (it would land in shell history) and never written anywhere. Capitals and
 // extra spaces do not matter (see src/seal.js). After writing, it opens the file again with
 // the same passphrase and checks that what comes out is what went in.
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateConfig } = require('./src/plans.js');
+const { loadPayload } = require('./payload.js');
 const { seal, unseal, normalisePassphrase } = require('./src/seal.js');
 
 const args = process.argv.slice(2);
@@ -58,8 +59,8 @@ function ask(prompt) {
 
 (async () => {
   const configPath = path.resolve(configArg);
-  const config = validateConfig(JSON.parse(fs.readFileSync(configPath, 'utf8')));
-  const payload = { config, extras: {} };
+  const payload = loadPayload(configPath);
+  const carried = Object.keys(payload.extras);
 
   const first = await ask('Passphrase: ');
   const second = await ask('Again: ');
@@ -71,7 +72,7 @@ function ask(prompt) {
 
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify(envelope, null, 1) + '\n');
-  console.log(`sealed ${path.basename(configPath)} -> ${path.relative(process.cwd(), outPath)} (${envelope.kdf.iterations} PBKDF2 rounds)`);
+  console.log(`sealed ${path.basename(configPath)}${carried.length ? ` with ${carried.join(', ')}` : ''} -> ${path.relative(process.cwd(), outPath)} (${envelope.kdf.iterations} PBKDF2 rounds)`);
 })().catch((e) => {
   console.error(`seal.js: ${e.message}`);
   process.exit(1);

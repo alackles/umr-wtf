@@ -11,6 +11,10 @@
 // The plan configuration is embedded as a JSON block, or, with --sealed, as the encrypted
 // envelope that seal.js wrote, behind an unlock screen. The build refuses to produce a page
 // that could talk to the network.
+//
+// A configuration can carry text for the page to show and offer for copying (payload.js): a
+// script to run somewhere else. In the plain build that text sits in a JSON block of its own,
+// which a browser never runs, and it is the one part of the page the network check skips.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -26,9 +30,10 @@ const configPath = path.resolve(arg('--config', path.join(root, 'demo', 'plans.d
 const outPath = path.resolve(arg('--out', path.join(root, 'dist', 'index.html')));
 const entry = 'ui/app.js';
 
-const { validateConfig } = require('./src/plans.js');
+const { loadPayload } = require('./payload.js');
 const { checkEnvelope } = require('./src/seal.js');
 let config = null;
+let extras = {};
 let envelope = null;
 if (sealedPath) {
   if (args.includes('--config')) {
@@ -42,7 +47,7 @@ if (sealedPath) {
   envelope = JSON.parse(fs.readFileSync(sealedPath, 'utf8'));
   checkEnvelope(envelope);
 } else {
-  config = validateConfig(JSON.parse(fs.readFileSync(configPath, 'utf8')));
+  ({ config, extras } = loadPayload(configPath));
 }
 
 // Collect modules reachable from the entry.
@@ -68,8 +73,8 @@ for (const [id, code] of modules) {
 }
 bundle += `__require(${JSON.stringify(entry)});\n})();\n`;
 
-const safeJson = JSON.stringify(sealedPath ? envelope : config).replace(/</g, '\\u003c');
-const dataId = sealedPath ? 'sealed-config' : 'plan-config';
+const block = (id, data) => `<script type="application/json" id="${id}">${JSON.stringify(data).replace(/</g, '\\u003c')}</script>`;
+const extrasBlock = Object.keys(extras).length ? block('plan-extras', extras) : '';
 const stamp = arg('--stamp', new Date().toISOString().slice(0, 10));
 let html = fs.readFileSync(path.join(src, 'page.html'), 'utf8');
 const put = (marker, value) => {
@@ -77,19 +82,22 @@ const put = (marker, value) => {
   html = html.split(marker).join(value);
 };
 put('/*__STYLE__*/', fs.readFileSync(path.join(src, 'style.css'), 'utf8'));
-put('<!--__DATA__-->', `<script type="application/json" id="${dataId}">${safeJson}</script>`);
+put('<!--__DATA__-->', (sealedPath ? block('sealed-config', envelope) : block('plan-config', config)) + extrasBlock);
 put('/*__SCRIPT__*/', bundle.replace(/<\/script/gi, '<\\/script'));
 put('__BUILD_STAMP__', stamp);
 
 // Nothing leaves the machine: fail the build if the page could reach the network.
+// Checked: everything a browser could run or load. Not checked: the extras block, which is
+// text the page displays. The page's own policy (default-src 'none') holds either way.
+const checked = extrasBlock ? html.split(extrasBlock).join('') : html;
 const offenders = [];
 const urlRe = /\b(?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,}[^\s"'<>)]*/gi;
-for (const m of html.match(urlRe) || []) {
+for (const m of checked.match(urlRe) || []) {
   if (/^https?:\/\/www\.w3\.org\/(2000\/svg|1999\/xhtml)$/.test(m)) continue; // XML namespaces, never fetched
   offenders.push(m);
 }
 for (const word of ['fetch(', 'XMLHttpRequest', 'WebSocket', 'sendBeacon', 'EventSource', 'importScripts', 'navigator.serviceWorker']) {
-  if (html.includes(word)) offenders.push(word);
+  if (checked.includes(word)) offenders.push(word);
 }
 if (!/http-equiv="Content-Security-Policy"/.test(html)) offenders.push('missing Content-Security-Policy');
 if (offenders.length) {
@@ -105,5 +113,6 @@ if (sealedPath && (html.includes('id="plan-config"') || /"plans"\s*:/.test(html)
 
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, html);
-const what = sealedPath ? 'sealed' : `plans: ${config.plans.map((p) => p.short).join(', ')}`;
+const carried = Object.keys(extras).length ? `; carries: ${Object.keys(extras).join(', ')}` : '';
+const what = sealedPath ? 'sealed' : `plans: ${config.plans.map((p) => p.short).join(', ')}${carried}`;
 console.log(`built ${path.relative(process.cwd(), outPath)}  (${(html.length / 1024).toFixed(0)} kB, ${modules.size} modules, ${what})`);

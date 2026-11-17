@@ -28,6 +28,7 @@ Content-Security-Policy that tells the browser to block any.
 | `demo/make-eobs.js` | Writes a made-up household's year of EOBs, with the right answer |
 | `demo/score-table.js` | Marks a table an agent made from those EOBs against the answer |
 | `build.js` | Builds the single file |
+| `payload.js` | Reads a plan configuration and any text it carries along, for the build and the sealing |
 | `seal.js` | Seals a plan configuration with a passphrase, for the public site |
 | `site/plans.sealed.json` | The sealed plan data the public site is built from |
 
@@ -63,7 +64,13 @@ Capitals and extra spaces in the passphrase don't matter.
     node seal.js --config path/to/plans.json     # asks for the passphrase; writes site/plans.sealed.json
     node build.js --sealed site/plans.sealed.json --out _site/index.html
 
-Sealing is a separate step from building, run only when the plans change. On every push to
+A configuration can carry text files along with it, named under `"extras"` as paths beside
+the configuration file. The real one carries a script that downloads a year of EOBs from the
+administrator's member site, which the page offers on its real-claims tab as a bookmark and
+as text to copy. The page shows that text and never runs it; it is sealed with the plans, and
+like them it is in this repository only as ciphertext.
+
+Sealing is a separate step from building, run only when the plans or that script change. On every push to
 `main`, `.github/workflows/pages.yml` runs the tests, builds the sealed page, and publishes it.
 
 The plans in `demo/` are invented. Real plan data is kept out of this repository except as
