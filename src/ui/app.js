@@ -7,7 +7,7 @@ const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
 const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
 const { evaluate, tradeTable, sensitivity, sensitivityLines, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, addItems, COLUMNS } = require('../importer.js');
-const { agentPrompt, claimsWording } = require('../prompt.js');
+const { agentPrompt, claimsWording, example: promptExample } = require('../prompt.js');
 const { CATEGORIES } = require('../plans.js');
 const { stackedBars, hideTip } = require('./charts.js');
 const { itemsTable } = require('./table.js');
@@ -45,7 +45,7 @@ function load() {
   }
 }
 function fresh() {
-  return { v: STORE_VERSION, mode: 'A', answers: defaultAnswers(config, todayIso()), table: { items: [], groupsOff: [] }, importText: '', importErrors: [], importNote: '', promptKind: 'frontier' };
+  return { v: STORE_VERSION, mode: 'A', answers: defaultAnswers(config, todayIso()), table: { items: [], groupsOff: [] }, importText: '', importErrors: [], importNote: '', process: 'self', promptKind: 'frontier' };
 }
 
 function changed(structural) {
@@ -207,11 +207,10 @@ function renderForm() {
     formEl.appendChild(gatesSection(n++, a, current, onPlan, next));
     formEl.appendChild(eventsSection(n++, a, next));
   } else {
-    formEl.appendChild(getEobsSection(n++));
-    formEl.appendChild(promptSection(n++));
-    formEl.appendChild(importSection(n++));
-    formEl.appendChild(checkSection(n++));
     formEl.appendChild(peopleSection(n++, a, current));
+    formEl.appendChild(getEobsSection(n++));
+    formEl.appendChild(processSection(n++));
+    formEl.appendChild(importSection(n++));
     formEl.appendChild(eventsSection(n++, a, next));
   }
   const accounts = accountsSection(n, a, next);
@@ -638,12 +637,32 @@ function getEobsSection(n) {
   return section(n, 'Get your EOBs', claimsWording(config).where, h('p', { class: 'hint block' }, 'A script that downloads them all in one go is planned and not built yet.'));
 }
 
+// What a table of line items has to look like. Shown to someone typing their own, and beside the import box.
+function formatHelp() {
+  return [
+    h('p', null, 'CSV with a header row, or JSON (a list of objects). One line per service. Columns:'),
+    h(
+      'ul',
+      null,
+      h('li', null, h('code', null, 'person'), ' a name, matching "Who is covered"'),
+      h('li', null, h('code', null, 'month'), ' 1 to 12, or ', h('code', null, 'date'), ' as YYYY-MM-DD'),
+      h('li', null, h('code', null, 'category'), ' one of: ', CATEGORIES.join(', ')),
+      h('li', null, h('code', null, 'allowed'), ' the plan\'s allowed amount for the line (plan paid plus what you owed)'),
+      h('li', null, h('code', null, 'network'), ' in or out (blank means in)'),
+      h('li', null, h('code', null, 'count'), ' optional: visits or fills the line stands for. Use 0 for an extra line on a visit already counted, such as a lab drawn at an office visit'),
+      h('li', null, h('code', null, 'billed'), ' optional, out-of-network only: what the provider charged'),
+      h('li', null, h('code', null, 'group'), ' optional label, such as "ER visit in March" or "weekly therapy"')
+    ),
+    h('p', { class: 'muted' }, `Accepted columns: ${COLUMNS.join(', ')}. Anything else is reported, not ignored.`)
+  ];
+}
+
 const PROMPT_KINDS = [
   { value: 'frontier', label: 'Claude, ChatGPT, Gemini or similar', sub: 'Reads the EOBs, builds the table, checks it, and talks the plans through with you.' },
   { value: 'small', label: 'A small model on my own computer', sub: 'Copies EOB rows into the table and nothing more. Results may vary; this one is mostly for the curious.' },
 ];
 
-function promptSection(n) {
+function agentPanel() {
   const kind = S.promptKind === 'small' ? 'small' : 'frontier';
   const text = agentPrompt(config, kind);
   const box = h('textarea', { id: 'prompt-text', class: 'prompt-text', rows: '14', readonly: true, spellcheck: 'false', 'aria-label': 'The prompt' });
@@ -685,10 +704,7 @@ function promptSection(n) {
     kind === 'small'
       ? 'Small models usually cannot open PDFs, so turn each EOB into text first and paste a few at a time under the prompt. Each reply is a piece of the table: add each piece in the next step.'
       : 'Start a new chat, paste the prompt, and attach your EOBs. If they will not all fit in one message, send them in batches; the prompt tells the agent to expect that. It will ask you a few questions and then give you a table to bring back here.';
-  return section(
-    n,
-    'Hand them to an AI agent',
-    'Optional. If you would rather not, skip this step and type or paste a table yourself in the next one.',
+  return [
     choice(
       PROMPT_KINDS,
       kind,
@@ -700,7 +716,38 @@ function promptSection(n) {
     ),
     h('p', { class: 'hint block' }, how, ' The prompt carries the plan details from this page, so every agent works from the same numbers.'),
     h('div', { class: 'row-actions' }, copy, status),
-    details
+    details,
+  ];
+}
+
+function processSection(n) {
+  const way = S.process === 'agent' ? 'agent' : 'self';
+  const body =
+    way === 'agent'
+      ? agentPanel()
+      : [
+          h('p', { class: 'hint block' }, 'Make a table with one line for each service on each EOB. A spreadsheet saved as CSV works.'),
+          h('div', { class: 'help' }, formatHelp()),
+          h('p', { class: 'hint block' }, 'An example:'),
+          h('pre', { class: 'example' }, promptExample(config, claimsWording(config), false).csv),
+        ];
+  return section(
+    n,
+    'Process the claims',
+    'Turn your EOBs into a table of line items.',
+    choice(
+      [
+        { value: 'self', label: 'Do it myself' },
+        { value: 'agent', label: 'Hand them to an AI agent' },
+      ],
+      way,
+      (v) => {
+        S.process = v;
+        changed(true);
+      },
+      { id: 'process', aria: 'How to process the claims' }
+    ),
+    body
   );
 }
 
@@ -775,7 +822,7 @@ function importSection(n) {
   return section(
     n,
     'Bring the table back',
-    'Paste what the agent gave you, or load it as a file. Any table in the format below works, including one you type.',
+    'Paste your table, or load it as a file.',
     box,
     h(
       'div',
@@ -824,36 +871,8 @@ function importSection(n) {
     S.importNote && !errors ? h('p', { class: 'hint block', role: 'status' }, S.importNote) : null,
     S.importRepeat ? h('div', { class: 'problem', role: 'alert' }, h('span', null, h('b', null, 'Nothing was added. '), 'Every row in the box is already in the table. Was this batch pasted twice?')) : null,
     errors,
-    h(
-      'details',
-      { class: 'help' },
-      h('summary', null, 'The format'),
-      h('p', null, 'CSV with a header row, or JSON (a list of objects). One line per service. Columns:'),
-      h(
-        'ul',
-        null,
-        h('li', null, h('code', null, 'person'), ' a name, matching "Who is covered"'),
-        h('li', null, h('code', null, 'month'), ' 1 to 12, or ', h('code', null, 'date'), ' as YYYY-MM-DD'),
-        h('li', null, h('code', null, 'category'), ' one of: ', CATEGORIES.join(', ')),
-        h('li', null, h('code', null, 'allowed'), ' the plan\'s allowed amount for the line (plan paid plus what you owed)'),
-        h('li', null, h('code', null, 'network'), ' in or out (blank means in)'),
-        h('li', null, h('code', null, 'count'), ' optional: visits or fills the line stands for. Use 0 for an extra line on a visit already counted, such as a lab drawn at an office visit'),
-        h('li', null, h('code', null, 'billed'), ' optional, out-of-network only: what the provider charged'),
-        h('li', null, h('code', null, 'group'), ' optional label, such as "ER visit in March" or "weekly therapy"')
-      ),
-      h('p', { class: 'muted' }, `Accepted columns: ${COLUMNS.join(', ')}. Anything else is reported, not ignored.`)
-    )
-  );
-}
-
-function checkSection(n) {
-  const t = S.table;
-  return section(
-    n,
-    'Check it against your claims',
-    null,
-    h('p', null, h('b', null, 'If you are using an AI agent to do this, you are responsible for checking that its output is the same as your actual claims.')),
-    h('p', { class: 'hint block' }, 'The prompt asks the agent to say, for each person, how many EOBs it read and what they say you owed. Start with those numbers.'),
+    h('details', { class: 'help' }, h('summary', null, 'The format'), formatHelp()),
+    h('p', { class: 'intro' }, 'This page does not check whether or not this table is accurate, because it can\'t do that, because you are the only one who has the original PDFs of your claims. If something seems off, you should investigate.'),
     t.items.length
       ? h(
           'div',
@@ -870,7 +889,7 @@ function checkSection(n) {
             },
           })
         )
-      : h('p', { class: 'muted' }, 'No line items yet.')
+      : null
   );
 }
 
