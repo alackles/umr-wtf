@@ -127,3 +127,55 @@ test('months elapsed', () => {
   assert.strictEqual(monthsElapsed('2099-02-30'), null);
   assert.strictEqual(monthsElapsed('soon'), null);
 });
+
+// ---- this year's plan sends visits through the deductible -----------------------------------
+test('on a plan with no visit copays the accumulators give back every charge', () => {
+  for (const charges of [0, 870, 4300]) {
+    const { items, usage } = year({ office: 6, urgent: 1, charges });
+    const acc = accumulators(items, lichen, false);
+    const est = backOut({ plan: lichen, family: false, usage, ...acc });
+    near(est.charges, 6 * T.office + T.urgent + charges);
+    near(est.residual, charges);
+    near(est.copays, 0);
+    assert.strictEqual(est.priceScale, 1);
+    assert.deepStrictEqual(est.problems, []);
+  }
+});
+
+test('visits that cost less than the typical price: the dollars win and the prices shrink to fit', () => {
+  const cheap = T.office / 2;
+  const items = [];
+  for (let i = 0; i < 6; i++) items.push({ person: 'a', month: 1 + i, category: 'office', allowed: cheap });
+  const acc = accumulators(items, lichen, false);
+  const usage = [{ category: 'office', count: 6, allowedEach: T.office }];
+  const est = backOut({ plan: lichen, family: false, usage, ...acc });
+  near(est.charges, 6 * cheap);
+  near(est.priceScale, 0.5);
+  near(est.residual, 0);
+  assert.ok(est.notes.some((n) => n.code === 'prices-shrunk'));
+  // A price the person typed is theirs: it is kept, and only the guessed prices give way.
+  const typed = backOut({ plan: lichen, family: false, usage: usage.concat([{ category: 'ded_coins', count: 1, allowedEach: 2 * cheap, given: true }]), ...acc });
+  near(typed.priceScale, (6 * cheap - 2 * cheap) / (6 * T.office));
+  near(typed.listedGiven, 2 * cheap);
+  // The same visits on a copay plan never touch the prices: copays do not depend on them.
+  const onFern = backOut({ plan: fern, family: false, usage, ...accumulators(items, fern, false) });
+  assert.strictEqual(onFern.priceScale, 1);
+});
+
+test('a pooled family deductible: one person\'s share does not start coinsurance, the family\'s does', () => {
+  // Two people, 3,300 each: together past the family deductible, neither past it alone.
+  const items = [
+    { person: 'a', month: 2, category: 'ded_coins', allowed: 3300 },
+    { person: 'b', month: 3, category: 'ded_coins', allowed: 3300 },
+  ];
+  const r = replay(items, lichen, { family: true });
+  const b = { dedMet: r.acc.in.ded.b, oopMet: r.acc.in.oop.b };
+  near(b.dedMet, lichen.in.ded[1] - 3300);
+  const est = backOut({ plan: lichen, family: true, usage: [], familyDedMet: true, ...b });
+  near(est.charges, 3300);
+  assert.deepStrictEqual(est.problems, []);
+  // Money beyond the deductible with no deductible met, on a plan with no copays to blame.
+  const odd = backOut({ plan: lichen, family: false, usage: [], dedMet: 310, oopMet: 325 });
+  assert.strictEqual(odd.extraCopays, 15);
+  assert.ok(/other care/.test(odd.notes[0].text));
+});

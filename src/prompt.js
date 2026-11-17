@@ -151,6 +151,8 @@ function planFacts(config, opts = {}) {
   return out.join('\n');
 }
 
+const nameList = (plans) => plans.map((p) => p.name).join(', ').replace(/, ([^,]*)$/, ' and $1');
+
 const VISIT = { office: 'an office, specialist or therapy visit', urgent: 'urgent care', teladoc: 'a telehealth visit' };
 
 // How to choose a category, as an ordered list keyed on how this year's plan treated the row.
@@ -167,7 +169,13 @@ function categoryGuide(config, c, small) {
       byAmount.get(r.copay).add(cat);
     }
   }
-  const erSkipsDeductible = plans.every((p) => !p.rules.er_facility.ded);
+  // On some plans an emergency room visit skips the deductible, so one that went to it was an
+  // admission and belongs with hospital care. Where the plans differ on that, name the ones it holds for.
+  const erSkips = plans.filter((p) => !p.rules.er_facility.ded);
+  const erClause = !erSkips.length ? '' : `, and${erSkips.length < plans.length ? ` (on ${nameList(erSkips)})` : ''} nothing on the claim went to "${col.deductible}"`;
+  // Plans that charge a visit no copay and send it to the deductible, beside plans that do not:
+  // there the treatment cannot tell a visit from a lab, and the difference matters on the others.
+  const visitsToDed = plans.filter((p) => p.rules.office.ded);
   const such = (list) => (list && list.length ? ` (labels such as ${quoted(list)})` : '');
 
   const out = [];
@@ -177,7 +185,7 @@ function categoryGuide(config, c, small) {
       : `1. The row has an amount under "${col.notCovered}": \`not_covered\`. Use that amount as \`allowed\`, and say in the \`group\` label what the care was ("ER visit in March, refused").`
   );
   out.push(
-    `2. The claim is an emergency-room visit: at least one of its rows is labelled as emergency care${such(c.labels.er)}${erSkipsDeductible ? `, and nothing on the claim went to "${col.deductible}"` : ''}. ` +
+    `2. The claim is an emergency-room visit: at least one of its rows is labelled as emergency care${such(c.labels.er)}${erClause}. ` +
       'Put the whole claim in as a single row: `er_facility` if the provider is a hospital or other facility, `er_physician` if it is a doctor or a physician group. ' +
       `${small ? `Copy its amounts from the "${c.totals}" row.` : `Work out \`allowed\` from the "${c.totals}" row.`} The claim's other rows (drugs, labs, imaging) are part of the visit, and the copay is charged once per visit and can be spread over several rows, which is why the claim goes in whole.`
   );
@@ -191,8 +199,15 @@ function categoryGuide(config, c, small) {
   } else {
     out.push('3. The row is a visit to a doctor, therapist or clinic: `office`. Urgent care is `urgent`, and a telehealth visit is `teladoc`.');
   }
-  out.push(`4. Something went to "${col.deductible}", or there is an amount under "${col.coinsurance}": \`ded_coins\`. This covers hospital, outpatient, lab and imaging charges, and anything else billed on its own.`);
-  out.push(`5. The plan paid the whole allowed amount and nothing was charged:`);
+  let n = 4;
+  if (byAmount.size && visitsToDed.length) {
+    out.push(
+      `${n++}. On ${nameList(visitsToDed)} a visit is charged no copay and goes to the deductible like everything else, so on ${visitsToDed.length > 1 ? 'those plans' : 'that plan'} go by what the row was: ` +
+        '`office` for an office, specialist or therapy visit, `urgent` for urgent care. The other plans charge a visit very differently from a lab or a scan, so the difference matters.'
+    );
+  }
+  out.push(`${n++}. Something went to "${col.deductible}", or there is an amount under "${col.coinsurance}": \`ded_coins\`. This covers hospital, outpatient, lab and imaging charges, and anything else billed on its own.`);
+  out.push(`${n++}. The plan paid the whole allowed amount and nothing was charged:`);
   out.push(`   - \`preventive\` if it is preventive care: a checkup, a vaccine, a screening${such(c.labels.preventive)}. A lab or other extra on the same claim as a checkup, or on the same day at the same provider, is preventive too.`);
   out.push('   - otherwise `office` with `count` 0. That means the row rode along with a visit or a treatment of some other kind, such as a lab drawn during an office visit. This one is a guess, so list every row you put here.');
   return out.join('\n');

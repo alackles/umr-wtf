@@ -248,3 +248,70 @@ test('leaving mid-year: premiums and care for part of the year', () => {
   assert.ok(hh.items.every((it) => it.month <= 6));
   near(byId(evaluate(config, hh, { view: 'raw' }), 'fern').premiumYear, 140 * 13);
 });
+
+// ---- on the high-deductible plan this year ---------------------------------------------------
+const { replay } = require('../src/engine.js');
+const { applyPatch } = require('../src/plans.js');
+
+test('a full year on the high-deductible plan comes back out as the same year on it', () => {
+  const T = config.typicalAllowed;
+  const lichen = getPlan(config, 'lichen');
+  const lived = [];
+  for (let m = 1; m <= 12; m++) lived.push({ person: 'p1', month: m, category: 'office', allowed: T.office });
+  lived.push({ person: 'p1', month: 4, category: 'ded_coins', allowed: 2600 });
+  const was = replay(lived, lichen, { family: false });
+  const a = defaultAnswers(config, '2099-12-31');
+  a.currentPlan = 'lichen';
+  Object.assign(a.people[0], { dedMet: was.acc.in.ded.p1, oopMet: was.acc.in.oop.p1, usage: 'counts', counts: { office: 12, therapy: 0, urgent: 0, er: 0 } });
+  const hh = build(config, a);
+  assert.deepStrictEqual(hh.problems, []);
+  const out = evaluate(config, hh, { view: 'raw' });
+  near(byId(out, 'lichen').scenarios.expected.care.lo, was.memberTotal, 1);
+  // The same care on a copay plan: twelve copays, and only the rest meets the deductible.
+  const fern = getPlan(config, 'fern');
+  const onFern = replay(lived, fern, { family: false });
+  near(byId(out, 'fern').scenarios.expected.care.lo, onFern.memberTotal, 1);
+});
+
+test('fewer dollars than the visits would cost at typical prices: next year uses the dollars', () => {
+  const a = defaultAnswers(config, '2099-12-31');
+  a.currentPlan = 'lichen';
+  Object.assign(a.people[0], { dedMet: 540, oopMet: 540, usage: 'counts', counts: { office: 6, therapy: 0, urgent: 0, er: 0 } });
+  const hh = build(config, a);
+  assert.deepStrictEqual(hh.problems, []);
+  assert.ok(hh.notes.some((n) => n.code === 'prices-shrunk'));
+  const visits = hh.items.filter((it) => /office visits/.test(it.group));
+  near(visits.reduce((s, it) => s + it.count, 0), 6);
+  near(visits.reduce((s, it) => s + it.allowed, 0), 540);
+  const out = evaluate(config, hh, { view: 'raw' });
+  near(byId(out, 'lichen').scenarios.expected.care.lo, 540, 1);
+  near(byId(out, 'fern').scenarios.expected.care.lo, 6 * getPlan(config, 'fern').rules.office.copay, 1);
+});
+
+test('an open question about a pooled family deductible is settled for this year by the household\'s own numbers', () => {
+  const open = JSON.parse(JSON.stringify(config));
+  const i = open.plans.findIndex((p) => p.id === 'lichen');
+  open.plans[i] = applyPatch(open.plans[i], { 'in.dedMode': 'embedded', 'out.dedMode': 'embedded' });
+  open.plans[i].unknowns = [
+    { id: 'family-deductible', appliesTo: 'family', text: 'pooled or not', options: [{ label: 'per person', patch: {} }, { label: 'pooled', patch: { 'in.dedMode': 'aggregate', 'out.dedMode': 'aggregate' } }] },
+  ];
+  const one = getPlan(open, 'lichen').in.ded[0];
+  const answers = (dedMet) => {
+    const a = defaultAnswers(open, '2099-12-31');
+    a.currentPlan = 'lichen';
+    Object.assign(a.people[0], { dedMet, oopMet: dedMet, usage: 'checkups' });
+    a.people.push(Object.assign(newPerson('p2', 'spouse', 'Sam'), { dedMet: 0, oopMet: 0, usage: 'checkups' }));
+    return a;
+  };
+  const within = build(open, answers(one - 300));
+  assert.deepStrictEqual(within.problems, []);
+  assert.ok(!within.notes.some((n) => n.code === 'pooled-by-numbers'));
+  const past = build(open, answers(one + 900));
+  assert.deepStrictEqual(past.problems, []);
+  assert.ok(past.notes.some((n) => n.code === 'pooled-by-numbers'));
+  near(past.items.filter((it) => it.category === 'ded_coins').reduce((s, it) => s + it.allowed, 0), one + 900, 1);
+  // A single person cannot be past it on any reading: that is still a mistake to report.
+  const solo = answers(one + 900);
+  solo.people.pop();
+  assert.ok(build(open, solo).problems.some((p) => p.code === 'ded-over'));
+});

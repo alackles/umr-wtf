@@ -155,3 +155,16 @@ test('claims tab: a planned surgery adds to the table', () => {
   assert.ok(hh.items.some((it) => it.planned && it.category === 'ded_coins'));
   assert.ok(hh.assumptions.some((as) => /surgery/.test(as.text)));
 });
+
+test('a plan not offered this year stays out of the table prompt; one that sends visits to the deductible gets its own rule', () => {
+  const all = agentPrompt(config, 'frontier');
+  const hd = config.plans.find((p) => p.rules.office.ded);
+  assert.ok(all.includes(`On ${hd.name} a visit is charged no copay`));
+  const fewer = JSON.parse(JSON.stringify(config));
+  fewer.plans.find((p) => p.id === hd.id).currentYearOption = false;
+  const text = agentPrompt(fewer, 'frontier');
+  assert.ok(!text.includes(deductible(hd)));
+  assert.ok(!text.includes('is charged no copay'));
+  // With only copay plans in play the emergency-room rule reads as it always did.
+  assert.ok(/labelled as emergency care[^.]*, and nothing on the claim went to/.test(text));
+});

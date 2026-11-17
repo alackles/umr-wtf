@@ -4,8 +4,8 @@
 // The output is the same thing Path B imports: a list of line items with group labels, plus
 // the household facts the money views need. The engine never learns which path made them.
 
-const { ruleFor, tierFor, getPlan, RX_TIERS } = require('./plans.js');
-const { backOut, splitUsage, monthsElapsed, TOL } = require('./estimator.js');
+const { ruleFor, tierFor, getPlan, expandVariants, RX_TIERS } = require('./plans.js');
+const { backOut, monthsElapsed, TOL } = require('./estimator.js');
 
 // Usage presets, as visits in a full year. `other` is a rough yearly figure for labs,
 // imaging and the like, used only for people with no accumulators to read.
@@ -98,6 +98,18 @@ function monthly(base, yearlyCount, allowedEach, months) {
   return out;
 }
 
+// This year's plan as the numbers have to be read. Where the guide leaves open whether a
+// family deductible is pooled, the household's own numbers can settle it for this year:
+// one person's deductible met can only pass the single-person figure on a pooled plan.
+function planAsLived(plan, members) {
+  if (members.length < 2) return { plan, pooledByNumbers: null };
+  const { variants } = expandVariants(plan, { family: true, rx: false });
+  const fits = (v) => v.plan.in.dedMode === 'aggregate' || members.every((p) => (num(p.dedMet) || 0) <= v.plan.in.ded[0] + TOL);
+  const chosen = variants.find(fits) || variants[0];
+  const over = chosen !== variants[0] ? members.find((p) => (num(p.dedMet) || 0) > plan.in.ded[0] + TOL) : null;
+  return { plan: chosen.plan, pooledByNumbers: over || null };
+}
+
 function build(config, answers) {
   const problems = [];
   const notes = [];
@@ -105,10 +117,18 @@ function build(config, answers) {
   const working = [];
   const items = [];
   const typical = typicalAllowed(config, answers);
+  // A full price the person typed under Advanced is theirs, not the tool's guess.
+  const typed = (key) => num(answers.adv && answers.adv.typical && answers.adv.typical[key]) != null;
 
   const people = answers.people || [];
-  const current = answers.currentPlan ? getPlan(config, answers.currentPlan) : null;
-  const thisYear = current ? people.filter((p) => p.thisYear) : [];
+  const chosenPlan = answers.currentPlan ? getPlan(config, answers.currentPlan) : null;
+  const thisYear = chosenPlan ? people.filter((p) => p.thisYear) : [];
+  const lived = chosenPlan ? planAsLived(chosenPlan, thisYear) : null;
+  const current = lived ? lived.plan : null;
+  if (lived && lived.pooledByNumbers) {
+    const p = lived.pooledByNumbers;
+    notes.push({ code: 'pooled-by-numbers', person: p.id, text: `${p.name}'s deductible met is more than this plan's figure for one person. That only happens when the family deductible is pooled, so this year's numbers are read that way.` });
+  }
   const nextYear = people.filter((p) => p.nextYear);
   const familyThisYear = thisYear.length > 1;
 
@@ -200,17 +220,19 @@ function build(config, answers) {
         const fills = r ? num(r.fills) || 0 : 0;
         if (!(fills > 0)) continue;
         let price = num(r.price);
-        if (price == null) {
+        const guessed = price == null;
+        if (guessed) {
           price = RX_DEFAULT_PRICE[tierId];
           defaultPricesUsed.add(tierId);
         }
-        rx.push({ tier: tierId, fills, price });
+        rx.push({ tier: tierId, fills, price, guessed });
       }
     }
 
     let annual; // visits in a full year
     let erVisits; // carried over as they happened, not scaled
     let recurring = 0; // yearly charges through deductible and coinsurance
+    let priceScale = 1; // below 1 when this year's dollars show visits cost less than the typical prices
 
     if (onPlan) {
       const dedMet = num(person.dedMet);
@@ -226,18 +248,18 @@ function build(config, answers) {
       if (preset) presetsUsed.push({ person, preset });
 
       const usage = [
-        { category: 'office', count: ytd.office, allowedEach: typical.office },
-        { category: 'office', count: ytd.therapy, allowedEach: typical.therapy },
-        { category: 'urgent', count: ytd.urgent, allowedEach: typical.urgent },
-        { category: 'er_facility', count: ytd.er, allowedEach: typical.er_facility },
-        { category: 'er_physician', count: ytd.er, allowedEach: typical.er_physician },
+        { category: 'office', count: ytd.office, allowedEach: typical.office, given: typed('office') },
+        { category: 'office', count: ytd.therapy, allowedEach: typical.therapy, given: typed('therapy') },
+        { category: 'urgent', count: ytd.urgent, allowedEach: typical.urgent, given: typed('urgent') },
+        { category: 'er_facility', count: ytd.er, allowedEach: typical.er_facility, given: typed('er_facility') },
+        { category: 'er_physician', count: ytd.er, allowedEach: typical.er_physician, given: typed('er_physician') },
       ];
-      for (const r of rx) usage.push({ category: r.tier, count: r.fills * elapsed, allowedEach: r.price });
+      for (const r of rx) usage.push({ category: r.tier, count: r.fills * elapsed, allowedEach: r.price, given: !r.guessed });
       // Regular care already under way is part of this year's dollars: list it, so it explains
       // them instead of being scaled up as other care and then added again.
       const regularUsage = regular.map((r) => {
         const from = r.since === 'next' ? null : Number(r.since) >= 2 ? Number(r.since) : 1;
-        return { category: 'ded_coins', count: from == null ? 0 : (r.times * Math.max(0, elapsed - (from - 1))) / 12, allowedEach: r.cost };
+        return { category: 'ded_coins', count: from == null ? 0 : (r.times * Math.max(0, elapsed - (from - 1))) / 12, allowedEach: r.cost, given: true };
       });
       usage.push(...regularUsage);
 
@@ -271,10 +293,13 @@ function build(config, answers) {
       const fCharges = 12 / Math.max(0.5, endCharges);
 
       let extraVisits = 0;
+      let extraCharges = 0;
       if (est.extraCopays > 0) {
         const office = ruleFor(current, 'office', 'in');
         if (office.copay > 0) extraVisits = est.extraCopays / office.copay;
+        else extraCharges = est.extraCopays;
       }
+      priceScale = est.priceScale;
       annual = {
         office: (ytd.office * est.usageScale + extraVisits) * fVisits,
         therapy: ytd.therapy * est.usageScale * fVisits,
@@ -282,9 +307,9 @@ function build(config, answers) {
       };
       erVisits = ytd.er * est.usageScale;
 
-      recurring = Math.max(0, est.residual) * fCharges;
+      recurring = (Math.max(0, est.residual) + extraCharges) * fCharges;
       if (regularUsage.some((u) => u.count > 0) && !censored) {
-        const listed = splitUsage(current, usage).throughDed * est.usageScale;
+        const listed = est.listedGiven;
         if (listed > est.charges + 100) {
           notes.push({ code: 'regular-large', person: person.id, text: `${person.name}: the care listed would have put about ${money(listed)} through the deductible so far, more than the ${money(est.charges)} these numbers show. Next year uses the regular care as given.` });
         }
@@ -322,14 +347,18 @@ function build(config, answers) {
     // ---- line items for the coming year ------------------------------------------------
     const who = { person: person.id, network: 'in' };
     const label = (what) => `${person.name}: ${what}`;
-    items.push(...monthly(Object.assign({ category: 'office', group: label('office visits') }, who), annual.office, typical.office, allMonths));
-    items.push(...monthly(Object.assign({ category: 'office', group: label('therapy sessions') }, who), annual.therapy, typical.therapy, allMonths));
-    items.push(...monthly(Object.assign({ category: 'urgent', group: label('urgent care') }, who), annual.urgent, typical.urgent, allMonths));
+    // A typical price, unless this year's plan sent this kind of care through the deductible
+    // and the person's own dollars showed it cost less (see priceScale in the estimator).
+    const shrinks = (category) => onPlan && priceScale < 1 && !!ruleFor(current, category, 'in').ded;
+    const price = (key, category) => typical[key] * (shrinks(category) && !typed(key) ? priceScale : 1);
+    items.push(...monthly(Object.assign({ category: 'office', group: label('office visits') }, who), annual.office, price('office', 'office'), allMonths));
+    items.push(...monthly(Object.assign({ category: 'office', group: label('therapy sessions') }, who), annual.therapy, price('therapy', 'office'), allMonths));
+    items.push(...monthly(Object.assign({ category: 'urgent', group: label('urgent care') }, who), annual.urgent, price('urgent', 'urgent'), allMonths));
     if (erVisits > 0) {
       const m = Math.min(lastMonth, 6);
       const base = Object.assign({ group: label(erVisits === 1 ? 'ER visit' : 'ER visits'), month: m }, who);
-      items.push(Object.assign({}, base, { category: 'er_facility', count: erVisits, allowed: typical.er_facility * erVisits }));
-      items.push(Object.assign({}, base, { category: 'er_physician', count: erVisits, allowed: typical.er_physician * erVisits }));
+      items.push(Object.assign({}, base, { category: 'er_facility', count: erVisits, allowed: price('er_facility', 'er_facility') * erVisits }));
+      items.push(Object.assign({}, base, { category: 'er_physician', count: erVisits, allowed: price('er_physician', 'er_physician') * erVisits }));
     }
     if (recurring > 0) {
       const base = Object.assign({ category: 'ded_coins', group: label('labs, imaging, hospital and other care') }, who);
@@ -343,7 +372,7 @@ function build(config, answers) {
     }
     for (const r of rx) {
       anyRx = true;
-      items.push(...monthly(Object.assign({ category: r.tier, group: label(`${RX_LABEL[r.tier]} prescriptions`) }, who), r.fills * 12, r.price, allMonths).map((it) => it));
+      items.push(...monthly(Object.assign({ category: r.tier, group: label(`${RX_LABEL[r.tier]} prescriptions`) }, who), r.fills * 12, r.price * (r.guessed && shrinks(r.tier) ? priceScale : 1), allMonths));
     }
     if (oonOn) {
       const visits = num(person.oon && person.oon.visits) || 0;

@@ -91,7 +91,7 @@
       "id": "lichen",
       "name": "Lichen (high deductible)",
       "short": "Lichen",
-      "currentYearOption": false,
+      "currentYearOption": true,
       "account": "hsa",
       "in": { "ded": [2800, 5600], "dedMode": "aggregate", "coins": 0.25, "oop": [5500, 11000] },
       "out": { "ded": [5200, 10400], "dedMode": "aggregate", "coins": 0.5, "oop": [11500, 23000] },

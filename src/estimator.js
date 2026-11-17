@@ -23,13 +23,16 @@ const { ruleFor } = require('./plans.js');
 
 const TOL = 1; // dollars of slack before two numbers are called different
 
-// usage: [{ category, count, allowedEach }] care the person listed, year to date.
+// usage: [{ category, count, allowedEach, given }] care the person listed, year to date.
+// `given` marks a price the person typed; the rest are the tool's typical figures.
 // Returns how those lines split under the plan: copays, coinsurance that skips the
-// deductible, and charges that go through the deductible.
+// deductible, and charges that go through the deductible (`given` is the part of those
+// charges that stands on prices the person typed).
 function splitUsage(plan, usage) {
   let copays = 0;
   let knownCoins = 0;
   let throughDed = 0;
+  let given = 0;
   for (const u of usage) {
     if (!(u.count > 0)) continue;
     const rule = ruleFor(plan, u.category, 'in');
@@ -38,8 +41,10 @@ function splitUsage(plan, usage) {
     const c = Math.min((rule.copay || 0) * u.count, allowed);
     const rem = allowed - c;
     copays += c;
-    if (rule.ded) throughDed += rem;
-    else if (rule.coins) {
+    if (rule.ded) {
+      throughDed += rem;
+      if (u.given) given += rem;
+    } else if (rule.coins) {
       const rate = rule.coins === true ? plan.in.coins : rule.coins;
       let s = rem * rate;
       if (rule.min != null) s = Math.max(s, rule.min * u.count);
@@ -47,7 +52,7 @@ function splitUsage(plan, usage) {
       knownCoins += Math.min(s, rem);
     }
   }
-  return { copays, knownCoins, throughDed };
+  return { copays, knownCoins, throughDed, given };
 }
 
 // Back out one person's year-to-date charges.
@@ -64,10 +69,15 @@ function splitUsage(plan, usage) {
 //                   'dollars' | 'counts' | null (unsettled: reported as a problem)
 //   slack           dollars of disagreement to let through as 'dollars' without asking
 //
-// Returns { charges, residual, copays, coinsurance, usageScale, extraCopays, problems, notes }
-//   charges    everything that went through deductible and coinsurance, year to date
-//   residual   charges not explained by the listed care: labs, imaging, hospital, the rest
-//   problems   [{ code, text, blocking }]  inconsistent inputs, said out loud
+// Returns { charges, residual, copays, coinsurance, usageScale, priceScale, extraCopays, problems, notes }
+//   charges     everything that went through deductible and coinsurance, year to date
+//   residual    charges not explained by the listed care: labs, imaging, hospital, the rest
+//   priceScale  1, or less when the plan sends visits through the deductible and the visits
+//               listed, at typical prices, come to more than the charges. The charges are
+//               the person's own dollars and the prices are the tool's guess, so the prices
+//               give way: multiply them by this. Prices the person typed are left alone.
+//   listedGiven the part of the listed care that stands on prices the person typed
+//   problems    [{ code, text, blocking }]  inconsistent inputs, said out loud
 function backOut(input) {
   const { plan, family, usage } = input;
   const d = Number(input.dedMet) || 0;
@@ -88,14 +98,17 @@ function backOut(input) {
   if (o < d - TOL) {
     problems.push({ code: 'oop-under-ded', blocking: true, text: `Out-of-pocket met (${money(o)}) is less than deductible met (${money(d)}). The deductible counts toward out-of-pocket, so it should be at least as large.` });
   }
-  if (problems.length) return { charges: 0, residual: 0, copays: 0, coinsurance: 0, usageScale: 1, extraCopays: 0, problems, notes };
+  if (problems.length) return { charges: 0, residual: 0, copays: 0, coinsurance: 0, usageScale: 1, priceScale: 1, listedGiven: 0, extraCopays: 0, problems, notes };
 
-  let { copays, knownCoins, throughDed } = splitUsage(plan, usage);
+  let { copays, knownCoins, throughDed, given } = splitUsage(plan, usage);
   let usageScale = 1;
   const paidShare = input.censored ? input.paidShare : 1;
   if (paidShare != null) {
+    // Only the care that fell before the cap left a trace in the dollars.
     copays *= paidShare;
     knownCoins *= paidShare;
+    throughDed *= paidShare;
+    given *= paidShare;
   }
 
   const afterDed = o - d;
@@ -132,19 +145,43 @@ function backOut(input) {
     }
   }
 
-  const dedSatisfied = d >= D - TOL || !!input.familyDedMet;
+  // A pooled family deductible is only met when the family's is; one person's share says nothing.
+  const pooled = !!family && plan.in.dedMode === 'aggregate';
+  const dedSatisfied = (!pooled && d >= D - TOL) || !!input.familyDedMet;
   if (coins > TOL && !dedSatisfied && !input.censored) {
     // Coinsurance cannot start before a deductible is met, so this money was something flat:
-    // visits or prescriptions that were not listed.
+    // visits or prescriptions that were not listed. On a plan with no visit copay there is
+    // no such thing to count it as, and it is carried as other care.
     extraCopays = coins;
     coins = 0;
-    notes.push({ code: 'extra-copays', amount: extraCopays, text: `${money(extraCopays)} of what was paid is not explained by the care listed, and the deductible is not met, so it was treated as copays for more visits.` });
+    const flat = ruleFor(plan, 'office', 'in').copay > 0;
+    notes.push({
+      code: 'extra-copays',
+      amount: extraCopays,
+      text: flat
+        ? `${money(extraCopays)} of what was paid is not explained by the care listed, and the deductible is not met, so it was treated as copays for more visits.`
+        : `${money(extraCopays)} was paid beyond the deductible though the deductible is not met. It was counted as other care.`,
+    });
   }
 
   const viaCoins = share > 0 ? Math.max(0, coins) / share : 0;
   const charges = d + viaCoins;
-  const residual = Math.max(0, charges - throughDed * usageScale);
-  return { charges, residual, copays, coinsurance: Math.max(0, coins), knownCoins, usageScale, extraCopays, problems, notes };
+  const listedGiven = given * usageScale;
+  const listedGuessed = (throughDed - given) * usageScale;
+  let priceScale = 1;
+  // At a cap with no month given the charges are only a lower bound, so they prove nothing
+  // about prices.
+  const lowerBound = input.censored && paidShare == null;
+  if (!lowerBound && listedGuessed > TOL && listedGiven + listedGuessed > charges + TOL) {
+    priceScale = Math.max(0, charges - listedGiven) / listedGuessed;
+    notes.push({
+      code: 'prices-shrunk',
+      scale: priceScale,
+      text: `At typical full prices the care listed comes to ${money(listedGiven + listedGuessed)}, more than the ${money(charges)} these numbers show, so lower prices were used.`,
+    });
+  }
+  const residual = Math.max(0, charges - listedGiven - listedGuessed * priceScale);
+  return { charges, residual, copays, coinsurance: Math.max(0, coins), knownCoins, usageScale, priceScale, listedGiven, extraCopays, problems, notes };
 }
 
 // Months of the year elapsed at a date, as a fraction of twelve. "2026-07-01" -> about 6.
