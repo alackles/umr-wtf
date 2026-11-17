@@ -1,7 +1,11 @@
 'use strict';
-// The agent prompts for the real-claims path. Two of them:
-//   frontier  for large hosted models: read the EOBs, build the table, check it, ask, compare
+// The agent prompts for the real-claims path. Three of them:
+//   frontier  for large hosted models: read the EOBs, build the table, check it, ask
 //   small     for small local models: copy EOB rows into the table and nothing else
+//   advice    for large hosted models: work out each plan's cost from a finished table, and
+//             talk the choice through. Kept apart from the first so that making the table
+//             carries nothing it does not need, and so the agent's sums stay independent of
+//             the page's.
 //
 // Plan facts and the administrator's EOB wording come from the configuration, so nothing in
 // this file knows any particular plan. The worked example is priced by the engine under one
@@ -80,17 +84,16 @@ function dedModeText(plan, side) {
   return plan[side].dedMode === 'aggregate' ? 'one pooled deductible for the whole family' : 'each person has their own, and the family figure caps the total';
 }
 
-// The plans as Markdown. `premiums` adds what the comparison needs beyond cost-sharing.
+// Plans as Markdown: all of them, or `opts.plans`. `opts.premiums` adds what a comparison
+// needs beyond cost-sharing.
 function planFacts(config, opts = {}) {
-  const plans = config.plans;
+  const plans = opts.plans || config.plans;
   const names = plans.map((p) => p.name);
   const out = [];
   const head = (first) => [row([first].concat(names)), row(['---'].concat(names.map(() => '---')))];
 
-  out.push(`Plan year ${config.planYear}. Administrator: ${config.administrator}.${config.network ? ` Network: ${config.network}.` : ''}`);
-  out.push('');
   out.push(...head(''));
-  out.push(row(['Offered this year'].concat(plans.map((p) => (p.currentYearOption ? 'yes' : 'no')))));
+  if (!opts.plans) out.push(row(['Offered this year'].concat(plans.map((p) => (p.currentYearOption ? 'yes' : 'no')))));
   out.push(row(['Deductible, in-network (one person / family)'].concat(plans.map((p) => pair(p.in.ded)))));
   out.push(row(['How the family deductible works'].concat(plans.map((p) => dedModeText(p, 'in')))));
   out.push(row(['Your share after the deductible, in-network'].concat(plans.map((p) => pct(p.in.coins)))));
@@ -266,31 +269,34 @@ function columnsGuide(c, small) {
   return out.join('\n');
 }
 
-function frontierPrompt(config) {
+// For large hosted models, part one: EOBs in, a checked table out. It carries only the plans
+// an EOB could have come from, and no premiums: nothing here compares plans.
+function tablePrompt(config) {
   const c = claimsWording(config);
   const col = c.columns;
   const ex = example(config, c, false);
-  const current = config.plans.filter((p) => p.currentYearOption).map((p) => p.name);
+  const offered = config.plans.filter((p) => p.currentYearOption);
+  const plans = offered.length ? offered : config.plans;
   const owedCols = `"${col.copay}" + "${col.deductible}" + "${col.coinsurance}"`;
   const p = [];
 
-  p.push('# Compare my medical plans using this year\'s claims');
+  p.push('# Turn my medical claims into a table');
   p.push(
-    `I am choosing a medical plan for ${config.planYear} from the ${config.plans.length} my employer offers through ${config.administrator}. ` +
-      'With this message I am giving you my household\'s Explanation of Benefits documents (EOBs) for this year. ' +
-      'Please turn them into a table of the care we actually received, check that table against the EOBs, and then help me see what the same care would cost on each plan.'
+    `My household's medical plan is run by ${config.administrator}. With this message I am giving you our Explanation of Benefits documents (EOBs) for this year. ` +
+      'Please turn them into a table of the care we actually received, and check that table against the EOBs. I will use the table to compare plans for next year.'
   );
   p.push('Three things to know before you start:');
   p.push(
     [
-      '- A separate tool will take your table, scale a part year up to twelve months, and do the final sums. So the table should hold only what happened. Please do not add rows for months that have not happened yet.',
+      '- A separate tool will take your table, scale a part year up to twelve months, and do the sums. So the table should hold only what happened. Please do not add rows for months that have not happened yet.',
       '- I may send the EOBs in several batches. Keep one running table. After each batch, tell me how many EOBs you have read so far and ask whether there are more before you go on.',
       '- If you can run code, use it for the arithmetic. Adding long columns of dollars without it is where this job usually goes wrong.',
     ].join('\n')
   );
 
-  p.push('## The plans');
-  p.push(planFacts(config, { premiums: true }));
+  p.push('## The plan we are on');
+  p.push(plans.length > 1 ? `Our EOBs come from one of these ${plans.length} plans. You will work out which in the checks below.` : 'Our EOBs come from this plan.');
+  p.push(planFacts(config, { plans }));
   p.push(c.thisYear);
 
   p.push('## Reading an EOB');
@@ -300,7 +306,7 @@ function frontierPrompt(config) {
   );
   p.push(
     [
-      `- Leave out a row whose amounts are all zero.`,
+      '- Leave out a row whose amounts are all zero.',
       '- If the same claim appears on more than one EOB because it was reprocessed, use the EOB with the latest notice date, and tell me which claims those were.',
       `- ${c.accumulators} You will use these in the checks below.`,
       '- Prescriptions filled at a pharmacy are not in these EOBs. You will ask me about them later.',
@@ -313,13 +319,13 @@ function frontierPrompt(config) {
   p.push(columnsGuide(c, false));
 
   p.push('## Choosing the category');
-  p.push(`The EOB's service label alone will not tell you the category. How this year's plan treated the row will. Use the first line that fits:`);
+  p.push('The EOB\'s service label alone will not tell you the category. How the plan treated the row will. Use the first line that fits:');
   p.push(categoryGuide(config, c));
   p.push(
     [
       'Three more things about categories:',
       '',
-      '- The reason line 5 is a guess: both answers cost nothing on a plan with copays, but on a plan that sends office visits to the deductible, a preventive row is free and the other kind is not. Pick the likelier one and list it.',
+      '- The reason line 5 is a guess: both answers cost nothing on a plan with copays, but on a plan that sends office visits to the deductible, a preventive row is free and the other kind is not. I may be comparing against a plan like that, so pick the likelier one and list it.',
       '- Once someone has reached their out-of-pocket limit, the plan pays everything in full, so lines 3 to 5 stop telling you anything about that person. From then on, go by what the service was and match their earlier rows of the same kind.',
       '- The `rx_` categories are for prescriptions and come from my answers, not from the EOBs.',
     ].join('\n')
@@ -337,12 +343,12 @@ function frontierPrompt(config) {
   p.push(
     [
       `1. For every EOB, the rows you copied add up to its "${c.totals}" row, column by column. If one does not, read it again.`,
-      `2. Work out which plan we are on this year from the deductible printed on the EOBs${current.length ? ` (it will be one of: ${current.join(', ')})` : ''}. Then replay the year under that plan: walk your rows in date order and apply that plan's rules from the tables above, keeping a running deductible and out-of-pocket total for each person and for the family. What your replay says each person owed should match what the EOBs say they owed, which is the sum of ${owedCols} across their EOBs, to the dollar. Where it does not, look for rows whose category gives a different charge from the one the EOB shows, and fix them.`,
+      `2. ${plans.length > 1 ? `Work out which plan we are on from the deductible printed on the EOBs (it will be one of: ${plans.map((x) => x.name).join(', ')}). Then replay` : 'Replay'} the year under that plan: walk your rows in date order and apply the plan's rules from the tables above, keeping a running deductible and out-of-pocket total for each person and for the family. What your replay says each person owed should match what the EOBs say they owed, which is the sum of ${owedCols} across their EOBs, to the dollar. Where it does not, look for rows whose category gives a different charge from the one the EOB shows, and fix them.`,
       '3. Compare each person\'s total with the out-of-pocket figure on their most recent EOB. A gap usually means a missing EOB or pharmacy copays, which count toward that figure and are not in these documents. Tell me the gap and what you think explains it.',
     ].join('\n')
   );
   p.push(
-    'If, after a second look, check 1 or check 2 is still off by more than a dollar for anyone, stop there. Show me the difference for each person and the rows you suspect, and wait for my answer. A comparison built on a table that does not reproduce this year is not worth having.'
+    'If, after a second look, check 1 or check 2 is still off by more than a dollar for anyone, stop there. Show me the difference for each person and the rows you suspect, and wait for my answer. A table that does not reproduce this year is not worth comparing plans with.'
   );
 
   p.push('## Then ask me');
@@ -351,37 +357,98 @@ function frontierPrompt(config) {
     [
       '1. Prescriptions. For each regular prescription: who takes it, whether it is generic, preferred brand, non-preferred brand or specialty, how many fills a month, and the full price before insurance if I can find it (a pharmacy receipt shows it). Add one row for each prescription for each month it was filled this year, with `allowed` the full price of that month\'s fills and `count` the number of fills. If I do not know the full price, use your best estimate and list it as a guess.',
       '2. Your guesses. Every row where you chose a category without being sure, with the choice you made.',
-      `3. Rows marked \`not_covered\`. Whether I expect that care to be covered next year. If I do, change the row to the category it would otherwise have had.`,
-      '4. What will be different next year: someone joining or leaving the plan, care that is ending or starting, anything planned such as a surgery or a birth. Care that is ending should have its own `group` label so I can switch it off in the tool. The tool has its own questions for who is covered and for a planned surgery or birth, so those do not need rows.',
+      '3. Rows marked `not_covered`. Whether I expect that care to be covered next year. If I do, change the row to the category it would otherwise have had.',
+      '4. Care that is ending, or that happened only once. Give each of these its own `group` label, so that I can switch it off in the tool.',
     ].join('\n')
   );
-
-  p.push('## Then compare the plans');
-  p.push(`For each of the ${config.plans.length} plans, work out a full year:`);
-  p.push(
-    [
-      '- Scale this year\'s recurring care up to twelve months. If the EOBs run through October, that is 12/10 of it. Leave one-off events, such as an ER visit, as they happened.',
-      '- Apply what I told you about next year.',
-      '- Replay the rows in date order under that plan\'s rules, as in check 2.',
-      '- Add the year\'s premiums for my household. Ask me who is covered and which premium column applies if you cannot tell.',
-    ].join('\n')
-  );
-  p.push(
-    'Show me, for each plan, the premiums, what we would pay for care, and the total. Where the plan facts say something is not known, show both results. Then show the worst case for each plan, which is the premiums plus the in-network out-of-pocket limit. ' +
-      'Premiums come out of pay before tax and care does not, unless it is paid through an FSA or HSA. Say so where it would change the order of the plans; I do not need a full tax calculation.'
-  );
-  p.push('Then tell me in plain words what the extra premium on the dearer plans buys, and how different next year would have to be for the cheapest plan to change. Lead with that trade. I will ask if I want your pick.');
 
   p.push('## What I need back at the end');
   p.push(
     [
       '1. The whole table as CSV in one code block, header row included, ready to paste into the tool.',
-      `2. For each person, how many EOBs you read and what those EOBs say we owed in total (${owedCols}), with "${col.notCovered}" amounts given separately. I am responsible for checking your table against my real claims, and these are the numbers I will check first.`,
+      `2. For each person, how many EOBs you read and what those EOBs say we owed in total (${owedCols}), with "${col.notCovered}" amounts given separately. I am the one who has to check your table against my real claims, and these are the numbers I will check first.`,
       '3. The list of guesses.',
       '4. Anything you could not read or could not reconcile.',
     ].join('\n')
   );
   p.push('If the conversation is getting long before you reach the end, give me the table so far as CSV so nothing is lost.');
+  return p.join('\n\n') + '\n';
+}
+
+// For large hosted models, part two: the table in, a second opinion out. The agent works out
+// each plan's cost for itself, by the same method the page uses, so the two can be compared.
+function advicePrompt(config) {
+  const p = [];
+  p.push('# Help me choose a medical plan from this year\'s claims');
+  p.push(
+    `I am choosing a medical plan for ${config.planYear} from the ${config.plans.length} my employer offers through ${config.administrator}. ` +
+      'I have a table of the care my household received this year, one row per service, made from our Explanation of Benefits documents. ' +
+      'If the table is not already in this conversation, I will paste it below. Please work out what the same care would cost on each plan, and help me think the choice through.'
+  );
+  p.push('If you can run code, use it for the arithmetic.');
+
+  p.push('## The plans');
+  p.push(planFacts(config, { premiums: true }));
+
+  p.push('## The table');
+  p.push('It is CSV with this header row:');
+  p.push(fence(HEADER.join(',')));
+  p.push(
+    [
+      '- `person`: who the care was for.',
+      '- `date`: the service date.',
+      '- `category`: one of the category names in the plan table above.',
+      '- `allowed`: the plan\'s allowed amount for the row, which is what the plan paid plus what we owed. Every plan works from this amount.',
+      '- `network`: `in` or `out`. Empty means `in`.',
+      '- `count`: how many visits or fills the row stands for. Empty means 1. A count of 0 means the row rode along with a visit that is already counted, so it is charged no copay of its own.',
+      '- `billed`: on out-of-network rows, what the provider billed.',
+      '- `group`: a label for rows that belong together.',
+    ].join('\n')
+  );
+
+  p.push('## First, ask me');
+  p.push('In one message, please ask:');
+  p.push(
+    [
+      '1. Who will be covered next year, and which premium figure applies to us.',
+      '2. What will be different next year: care that is ending or starting, anything planned such as a surgery or a birth, someone joining or leaving the plan.',
+      '3. Whether I plan to put money into an FSA or an HSA.',
+    ].join('\n')
+  );
+
+  p.push('## Then work out a full year on each plan');
+  p.push(
+    [
+      '1. Scale the table to twelve months. It holds only what happened this year. Find the latest date in it and work out how many months of the year that covers (the day of the year, divided by 365, times 12). Multiply `allowed`, `count` and `billed` on every row by 12 divided by that number. The exception is `er_facility` and `er_physician` rows, which stay as they are. The tool I am using scales the table this way, and doing the same lets your numbers be compared with its numbers.',
+      '2. Apply what I told you about next year.',
+      '3. Replay the rows in date order under the plan\'s rules, as set out below.',
+      '4. Add the year\'s premiums for my household.',
+    ].join('\n')
+  );
+  p.push('To replay a row, find the plan\'s rule for its category and network in the tables above. Then, in this order:');
+  p.push(
+    [
+      '- Copay, if the rule has one: the copay times `count`.',
+      '- Deductible, if the rule names it: what is left of the allowed amount goes to the deductible, until that person\'s deductible or the family\'s is met.',
+      '- Coinsurance, if the rule has a percentage: my share of what is still left.',
+      '- Nothing more is charged once that person\'s out-of-pocket limit, or the family\'s, is reached. Copays, deductible payments and coinsurance all count toward it.',
+    ].join('\n')
+  );
+  p.push(
+    'Keep separate running totals for in-network and out-of-network rows, except where the plan table says a row counts toward the in-network limits. `preventive` rows cost nothing. `not_covered` rows are mine in full and count toward nothing. On an out-of-network row, whatever was billed above the allowed amount is also mine and counts toward nothing.'
+  );
+
+  p.push('## What to show me');
+  p.push(
+    'For each plan: the premiums, what we would pay for care, and the total. Where the plan facts say something is not known, show both results. Then the worst case for each plan, which is the premiums plus the in-network out-of-pocket limit. ' +
+      'Premiums come out of pay before tax and care does not, unless it is paid through an FSA or HSA. Say so where it would change the order of the plans; I do not need a full tax calculation.'
+  );
+  p.push('Then tell me in plain words what the extra premium on the dearer plans buys, and how different next year would have to be for the cheapest plan to change. Lead with that trade. I will ask if I want your pick.');
+
+  p.push('## If I paste the tool\'s results');
+  p.push(
+    'The tool I am using works out the same thing from the same table. If I paste its results, compare them with yours plan by plan, using its raw-dollar figures. Where the two differ by more than about ten dollars, tell me which plan, by how much, and what you think explains it: a rule read differently, the scaling, the premiums, or something I told you about next year. Do not assume either one is right.'
+  );
   return p.join('\n\n') + '\n';
 }
 
@@ -422,11 +489,14 @@ function smallPrompt(config) {
   return p.join('\n\n') + '\n';
 }
 
-const KINDS = ['frontier', 'small'];
+// frontier: the table, for a large hosted model.  small: the table, for a small local model.
+// advice: a second opinion on the plans from a table that already exists.
+const KINDS = ['frontier', 'small', 'advice'];
 
 function agentPrompt(config, kind) {
   if (kind === 'small') return smallPrompt(config);
-  if (kind === 'frontier' || kind == null) return frontierPrompt(config);
+  if (kind === 'advice') return advicePrompt(config);
+  if (kind === 'frontier' || kind == null) return tablePrompt(config);
   throw new Error(`no prompt of kind "${kind}"`);
 }
 

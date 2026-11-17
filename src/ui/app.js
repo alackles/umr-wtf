@@ -8,6 +8,7 @@ const { build, buildFromTable, tableThrough, defaultAnswers, newPerson, PRESETS,
 const { evaluate, tradeTable, sensitivity, sensitivityLines, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, addItems, COLUMNS } = require('../importer.js');
 const { agentPrompt, claimsWording, example: promptExample } = require('../prompt.js');
+const { resultsText } = require('../report.js');
 const { CATEGORIES } = require('../plans.js');
 const { stackedBars, hideTip } = require('./charts.js');
 const { itemsTable } = require('./table.js');
@@ -15,7 +16,7 @@ const { itemsTable } = require('./table.js');
 const STORE_VERSION = 1;
 let config;
 let S; // { v, mode: 'A' | 'B', answers, table: { items, groupsOff }, importText, importErrors }
-const ui = { openGroups: new Set(), advOpen: false, promptOpen: false, uid: 1, scenario: 'expected' };
+const ui = { openGroups: new Set(), advOpen: false, promptOpen: {}, uid: 1, scenario: 'expected' };
 let formEl;
 let resultsEl;
 
@@ -647,48 +648,63 @@ function formatHelp() {
 }
 
 const PROMPT_KINDS = [
-  { value: 'frontier', label: 'Claude, ChatGPT, Gemini or similar', sub: 'Reads the EOBs, builds the table, checks it, and talks the plans through with you.' },
+  { value: 'frontier', label: 'Claude, ChatGPT, Gemini or similar', sub: 'Reads the EOBs, builds the table and checks it.' },
   { value: 'small', label: 'A small model on my own computer', sub: 'Copies EOB rows into the table and nothing more. Results may vary; this one is mostly for the curious.' },
 ];
 
-function agentPanel() {
-  const kind = S.promptKind === 'small' ? 'small' : 'frontier';
-  const text = agentPrompt(config, kind);
-  const box = h('textarea', { id: 'prompt-text', class: 'prompt-text', rows: '14', readonly: true, spellcheck: 'false', 'aria-label': 'The prompt' });
-  box.value = text;
-  const details = h('details', { class: 'help', open: ui.promptOpen }, h('summary', null, 'Read the prompt'), box);
-  details.addEventListener('toggle', () => {
-    ui.promptOpen = details.open;
-  });
-  const status = h('span', { class: 'hint', role: 'status' });
-  const done = (ok) => {
-    status.textContent = ok ? 'Copied.' : 'Could not copy from here. The prompt is selected below: press Ctrl+C, or Cmd+C on a Mac.';
-  };
-  const byHand = () => {
-    details.open = true;
-    box.focus();
-    box.select();
+// Copy text to the clipboard: the modern way where it is allowed, the old way where it is not.
+function copyOut(text, done) {
+  const oldWay = () => {
+    const ta = h('textarea', { class: 'offscreen', readonly: true, 'aria-hidden': 'true' });
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
     let ok = false;
     try {
       ok = document.execCommand('copy');
     } catch (e) {
       ok = false;
     }
+    document.body.removeChild(ta);
     done(ok);
   };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => done(true), oldWay);
+  else oldWay();
+}
+
+// A prompt with a button to copy it and a collapsed box to read it in. If copying fails, the
+// box opens with the text selected, so it can be copied by hand.
+function promptBlock(key, text, copyLabel, readLabel) {
+  const box = h('textarea', { id: `prompt-${key}`, class: 'prompt-text', rows: '14', readonly: true, spellcheck: 'false', 'aria-label': readLabel });
+  box.value = text;
+  const details = h('details', { class: 'help', open: !!ui.promptOpen[key] }, h('summary', null, readLabel), box);
+  details.addEventListener('toggle', () => {
+    ui.promptOpen[key] = details.open;
+  });
+  const status = h('span', { class: 'hint', role: 'status' });
   const copy = h(
     'button',
     {
       type: 'button',
       class: 'btn primary',
-      'data-focus': 'copy-prompt',
-      onclick: () => {
-        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => done(true), byHand);
-        else byHand();
-      },
+      'data-focus': `copy-${key}`,
+      onclick: () =>
+        copyOut(text, (ok) => {
+          status.textContent = ok ? 'Copied.' : 'Could not copy from here. The prompt is selected below: press Ctrl+C, or Cmd+C on a Mac.';
+          if (!ok) {
+            details.open = true;
+            box.focus();
+            box.select();
+          }
+        }),
     },
-    'Copy the prompt'
+    copyLabel
   );
+  return [h('div', { class: 'row-actions' }, copy, status), details];
+}
+
+function agentPanel() {
+  const kind = S.promptKind === 'small' ? 'small' : 'frontier';
   const how =
     kind === 'small'
       ? 'Small models usually cannot open PDFs, so turn each EOB into text first and paste a few at a time under the prompt. Each reply is a piece of the table: add each piece in the next step.'
@@ -711,8 +727,18 @@ function agentPanel() {
       { id: 'prompt-kind', aria: 'Which kind of agent' }
     ),
     h('p', { class: 'hint block' }, how, ' The prompt carries the plan details from this page, so every agent works from the same numbers.'),
-    h('div', { class: 'row-actions' }, copy, status),
-    details,
+    promptBlock('table', agentPrompt(config, kind), 'Copy the prompt', 'Read the prompt'),
+    kind === 'frontier'
+      ? [
+          h(
+            'p',
+            { class: 'or-advice' },
+            h('b', null, 'Or get advice from your agent directly.'),
+            ' You can also leave the page here and talk the choice through with your agent. This second prompt gives it all the plans and their premiums and asks it to work out each plan\'s cost from your table.'
+          ),
+          promptBlock('advice', agentPrompt(config, 'advice'), 'Copy the advice prompt', 'Read the advice prompt'),
+        ]
+      : null,
   ];
 }
 
@@ -1450,8 +1476,9 @@ function answersSummary() {
   return h('div', { class: 'print-only block' }, h('h3', null, 'What was entered'), h('ul', { class: 'notes' }, rows.map((r) => h('li', null, r))), h('p', { class: 'footnote' }, `Printed ${todayIso()}.`));
 }
 
-function footer() {
+function footer(res) {
   resultsEl.appendChild(answersSummary());
+  const copyStatus = h('span', { class: 'hint', role: 'status' });
   const notes = (config.footnotes || []).map((f) => h('p', { class: 'footnote' }, '* ', f));
   resultsEl.appendChild(
     h(
@@ -1463,6 +1490,30 @@ function footer() {
         'div',
         { class: 'row-actions no-print' },
         h('button', { type: 'button', class: 'btn', onclick: () => window.print() }, 'Print or save as PDF'),
+        res && res.out
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: 'btn',
+                'data-focus': 'copy-results',
+                onclick: () => {
+                  const text = resultsText(config, res.hh);
+                  copyOut(text, (ok) => {
+                    copyStatus.textContent = ok ? 'Copied.' : 'Could not copy from here. The text is below: press Ctrl+C, or Cmd+C on a Mac.';
+                    if (ok || document.getElementById('results-text')) return;
+                    // Shown only when copying failed, so the text can still be taken by hand.
+                    const box = h('textarea', { id: 'results-text', class: 'prompt-text no-print', rows: '10', readonly: true, 'aria-label': 'The results as text' });
+                    box.value = text;
+                    copyStatus.closest('.foot').appendChild(box);
+                    box.focus();
+                    box.select();
+                  });
+                },
+              },
+              'Copy these results as text'
+            )
+          : null,
         h(
           'button',
           {
@@ -1483,8 +1534,10 @@ function footer() {
             },
           },
           'Start over'
-        )
-      )
+        ),
+        copyStatus
+      ),
+      res && res.out && S.mode === 'B' ? h('p', { class: 'hint block no-print' }, 'The text is for pasting to your agent, so it can compare its numbers with the page\'s.') : null
     )
   );
 }

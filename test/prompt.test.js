@@ -6,6 +6,8 @@ const { parseTable, addItems, COLUMNS } = require('../src/importer.js');
 const { validateConfig, CATEGORIES, clone } = require('../src/plans.js');
 const { replay } = require('../src/engine.js');
 const { buildFromTable, defaultAnswers } = require('../src/household.js');
+const { evaluate } = require('../src/outlook.js');
+const { resultsText } = require('../src/report.js');
 
 const config = validateConfig(require('../demo/plans.demo.json'));
 const FENCE = '`'.repeat(3);
@@ -37,15 +39,42 @@ test('the header the prompts ask for is one the importer accepts', () => {
   for (const kind of ['frontier', 'small']) assert.ok(agentPrompt(config, kind).includes(HEADER.join(',')));
 });
 
-test('frontier prompt carries every plan, every category and the open plan questions', () => {
+const deductible = (p) => `$${p.in.ded[0].toLocaleString('en-US')} / $${p.in.ded[1].toLocaleString('en-US')}`;
+
+test('table prompt carries every category and only the plans an EOB could come from, with no premiums', () => {
   const text = agentPrompt(config, 'frontier');
   for (const cat of CATEGORIES) assert.ok(text.includes('`' + cat + '`'), cat);
   for (const p of config.plans) {
+    assert.strictEqual(text.includes(deductible(p)), !!p.currentYearOption, `${p.name} deductible`);
+    for (const v of p.premiums.family) assert.ok(!text.includes(`$${v.toFixed(2)}`), `${p.name} premium`);
+  }
+  assert.ok(!/compare the plans|Premiums per paycheck/i.test(text));
+});
+
+test('advice prompt carries every plan, its premiums, the open plan questions, and the page\'s way of scaling', () => {
+  const text = agentPrompt(config, 'advice');
+  for (const cat of CATEGORIES) assert.ok(text.includes('`' + cat + '`'), cat);
+  for (const p of config.plans) {
     assert.ok(text.includes(p.name), p.name);
-    assert.ok(text.includes(`$${p.in.ded[0].toLocaleString('en-US')} / $${p.in.ded[1].toLocaleString('en-US')}`), `${p.name} deductible`);
+    assert.ok(text.includes(deductible(p)), `${p.name} deductible`);
     for (const u of p.unknowns || []) assert.ok(text.includes(u.text), u.id);
     for (const v of p.premiums.family) assert.ok(text.includes(`$${v.toFixed(2)}`), `${p.name} premium`);
   }
+  assert.ok(text.includes(HEADER.join(',')));
+  assert.ok(/`er_facility` and `er_physician` rows, which stay as they are/.test(text));
+});
+
+test('results as text: both money views, every plan, and the assumptions', () => {
+  const answers = defaultAnswers(config, '2099-01-01');
+  answers.people[0].name = 'Sam';
+  const table = { items: parseTable('person,month,category,allowed\nSam,1,office,110\nSam,6,ded_coins,300\n').items, groupsOff: [] };
+  const hh = buildFromTable(config, answers, table);
+  const text = resultsText(config, hh);
+  for (const p of config.plans) assert.strictEqual(text.split(p.name).length - 1, 2, `${p.name} appears once in each view`);
+  assert.ok(text.indexOf('RAW DOLLARS') < text.indexOf('TAKE-HOME PAY'));
+  assert.ok(/through June 30/.test(text));
+  const raw = evaluate(config, hh, { view: 'raw' }).plans[0];
+  assert.ok(text.includes(`$${Math.round(raw.scenarios.expected.lo).toLocaleString('en-US')} in all`));
 });
 
 test('small prompt stops at the table: no plan tables, no premiums, no comparison', () => {
