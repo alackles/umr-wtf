@@ -1335,19 +1335,21 @@ function footer() {
 }
 
 // ---- boot -----------------------------------------------------------------------------------
+function header() {
+  return h(
+    'header',
+    { class: 'top' },
+    h('div', { class: 'brand' }, h('h1', null, 'umr-wtf'), h('p', { class: 'tagline' }, 'AHHH there\'s so many numbers!!!! Help  me!!'))
+  );
+}
+
 function start(rawConfig) {
   config = validateConfig(rawConfig);
   S = load() || fresh();
   if (S.answers.priority === 'protect') ui.scenario = 'bad'; // the year a saved choice is about
   const app = clear(document.getElementById('app'));
   document.title = `umr-wtf: ${config.planYear} plan chooser`;
-  app.appendChild(
-    h(
-      'header',
-      { class: 'top' },
-      h('div', { class: 'brand' }, h('h1', null, 'umr-wtf'), h('p', { class: 'tagline' }, 'AHHH there\'s so many numbers!!!! Help  me!!'))
-    )
-  );
+  app.appendChild(header());
   app.appendChild(
     h('p', { class: 'lede' }, `For ${config.audience || 'people'} choosing between ${config.plans.map((p) => p.name).join(', ').replace(/, ([^,]*)$/, ' and $1')} for ${config.planYear}.`)
   );
@@ -1364,14 +1366,20 @@ function start(rawConfig) {
   renderResults();
 }
 
+// The plain build carries the configuration as JSON; the sealed (public) build carries it
+// encrypted, and the unlock screen decrypts it first.
+function fail(e) {
+  document.getElementById('app').textContent = `This page could not start: ${e.message}`;
+  throw e;
+}
 if (typeof document !== 'undefined') {
-  const node = document.getElementById('plan-config');
+  const plain = document.getElementById('plan-config');
+  const sealed = document.getElementById('sealed-config');
   try {
-    start(JSON.parse(node.textContent));
+    if (plain) start(JSON.parse(plain.textContent));
+    else require('./unlock.js').boot(JSON.parse(sealed.textContent), (payload) => start(payload.config), header).catch(fail);
   } catch (e) {
-    const app = document.getElementById('app');
-    app.textContent = `This page could not start: ${e.message}`;
-    throw e;
+    fail(e);
   }
 }
 

@@ -20,9 +20,12 @@ Content-Security-Policy that tells the browser to block any.
 | `src/household.js` | Questionnaire answers, or an imported table, to line items |
 | `src/outlook.js` | Scenarios, take-home and raw views, the never-cheapest rule, break-even |
 | `src/importer.js` | CSV and JSON import |
+| `src/seal.js` | Encrypts and decrypts the plan data (WebCrypto: PBKDF2-SHA-256, AES-GCM) |
 | `src/ui/` | The page |
 | `demo/plans.demo.json` | Invented plans, for the demo build and the tests |
 | `build.js` | Builds the single file |
+| `seal.js` | Seals a plan configuration with a passphrase, for the public site |
+| `site/plans.sealed.json` | The sealed plan data the public site is built from |
 
 ## Use
 
@@ -30,5 +33,18 @@ Content-Security-Policy that tells the browser to block any.
     npm run build       # demo plans -> dist/index.html
     node build.js --config path/to/plans.json --out path/to/page.html
 
-The plans in this repository are invented. Real plan data is kept out of it.
+## The public site
+
+The site on GitHub Pages carries the real plan data only in encrypted form, behind a
+passphrase box. The passphrase decrypts it in the browser; nothing is sent anywhere.
+Capitals and extra spaces in the passphrase don't matter.
+
+    node seal.js --config path/to/plans.json     # asks for the passphrase; writes site/plans.sealed.json
+    node build.js --sealed site/plans.sealed.json --out _site/index.html
+
+Sealing is a separate step from building, run only when the plans change. On every push to
+`main`, `.github/workflows/pages.yml` runs the tests, builds the sealed page, and publishes it.
+
+The plans in `demo/` are invented. Real plan data is kept out of this repository except as
+ciphertext.
 Unofficial; estimates only.

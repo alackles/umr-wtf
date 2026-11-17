@@ -4,10 +4,12 @@
 //
 //   node build.js                                   demo plans  -> dist/index.html
 //   node build.js --config <plans.json> --out <file.html>
+//   node build.js --sealed site/plans.sealed.json --out <file.html>   the public site
 //
 // The source modules are plain CommonJS so the same files run under Node for tests. Here
 // each one is wrapped in a function and given a tiny `require` that resolves between them.
-// The plan configuration is embedded as a JSON block. The build refuses to produce a page
+// The plan configuration is embedded as a JSON block, or, with --sealed, as the encrypted
+// envelope that seal.js wrote, behind an unlock screen. The build refuses to produce a page
 // that could talk to the network.
 
 const fs = require('node:fs');
@@ -19,12 +21,29 @@ const arg = (name, fallback) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : fallback;
 };
 const root = __dirname;
+const sealedPath = arg('--sealed', null) && path.resolve(arg('--sealed'));
 const configPath = path.resolve(arg('--config', path.join(root, 'demo', 'plans.demo.json')));
 const outPath = path.resolve(arg('--out', path.join(root, 'dist', 'index.html')));
 const entry = 'ui/app.js';
 
 const { validateConfig } = require('./src/plans.js');
-const config = validateConfig(JSON.parse(fs.readFileSync(configPath, 'utf8')));
+const { checkEnvelope } = require('./src/seal.js');
+let config = null;
+let envelope = null;
+if (sealedPath) {
+  if (args.includes('--config')) {
+    console.error('--sealed and --config are exclusive: the sealed file already holds the plans.');
+    process.exit(1);
+  }
+  if (!fs.existsSync(sealedPath)) {
+    console.error(`No sealed file at ${path.relative(process.cwd(), sealedPath)}. Make one with: node seal.js --config <plans.json>`);
+    process.exit(1);
+  }
+  envelope = JSON.parse(fs.readFileSync(sealedPath, 'utf8'));
+  checkEnvelope(envelope);
+} else {
+  config = validateConfig(JSON.parse(fs.readFileSync(configPath, 'utf8')));
+}
 
 // Collect modules reachable from the entry.
 const src = path.join(root, 'src');
@@ -49,7 +68,8 @@ for (const [id, code] of modules) {
 }
 bundle += `__require(${JSON.stringify(entry)});\n})();\n`;
 
-const safeJson = JSON.stringify(config).replace(/</g, '\\u003c');
+const safeJson = JSON.stringify(sealedPath ? envelope : config).replace(/</g, '\\u003c');
+const dataId = sealedPath ? 'sealed-config' : 'plan-config';
 const stamp = arg('--stamp', new Date().toISOString().slice(0, 10));
 let html = fs.readFileSync(path.join(src, 'page.html'), 'utf8');
 const put = (marker, value) => {
@@ -57,7 +77,7 @@ const put = (marker, value) => {
   html = html.split(marker).join(value);
 };
 put('/*__STYLE__*/', fs.readFileSync(path.join(src, 'style.css'), 'utf8'));
-put('/*__CONFIG__*/', safeJson);
+put('<!--__DATA__-->', `<script type="application/json" id="${dataId}">${safeJson}</script>`);
 put('/*__SCRIPT__*/', bundle.replace(/<\/script/gi, '<\\/script'));
 put('__BUILD_STAMP__', stamp);
 
@@ -77,6 +97,13 @@ if (offenders.length) {
   process.exit(1);
 }
 
+// A sealed page must carry nothing but the envelope.
+if (sealedPath && (html.includes('id="plan-config"') || /"plans"\s*:/.test(html))) {
+  console.error('Build refused: the sealed page contains plain plan configuration.');
+  process.exit(1);
+}
+
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, html);
-console.log(`built ${path.relative(process.cwd(), outPath)}  (${(html.length / 1024).toFixed(0)} kB, ${modules.size} modules, plans: ${config.plans.map((p) => p.short).join(', ')})`);
+const what = sealedPath ? 'sealed' : `plans: ${config.plans.map((p) => p.short).join(', ')}`;
+console.log(`built ${path.relative(process.cwd(), outPath)}  (${(html.length / 1024).toFixed(0)} kB, ${modules.size} modules, ${what})`);
