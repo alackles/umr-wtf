@@ -385,3 +385,7 @@ table.rows select { padding: 3px 2px; max-width: 132px; }
   .results a { color: inherit; text-decoration: none; }
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* Example households: one quiet line under the tab switch until opened. */
+.examples { margin: 2px 2px 14px; }
+.examples .choice { margin-top: 8px; }

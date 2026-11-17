@@ -4,7 +4,7 @@
 
 const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
-const { build, buildFromTable, tableThrough, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
+const { build, buildFromTable, tableThrough, defaultAnswers, exampleAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
 const { evaluate, tradeTable, sensitivity, sensitivityLines, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, addItems, COLUMNS } = require('../importer.js');
 const { agentPrompt, claimsWording, example: promptExample } = require('../prompt.js');
@@ -192,6 +192,8 @@ function renderForm() {
   );
 
   if (S.mode === 'A') {
+    const examples = examplesBlock();
+    if (examples) formEl.appendChild(examples);
     formEl.appendChild(peopleSection(n++, a, current));
     formEl.appendChild(thisYearSection(n++, a, current, onPlan));
     formEl.appendChild(usageSection(n++, a, current));
@@ -218,6 +220,39 @@ function renderForm() {
     const again = formEl.querySelector(`[data-focus="${CSS.escape(focusKey)}"]`) || document.getElementById(focusKey);
     if (again && again.focus) again.focus({ preventScroll: true });
   }
+}
+
+// Example households from the configuration: one tap fills the questionnaire in, so the page
+// can be tried before anyone has their own numbers to hand.
+function examplesBlock() {
+  const list = config.examples || [];
+  if (!list.length) return null;
+  const load = (ex) => () => {
+    const blank = JSON.stringify(S.answers) === JSON.stringify(defaultAnswers(config, S.answers.asOf));
+    if (!blank && !S.example && !window.confirm('Replace your answers with this example?')) return;
+    S.answers = exampleAnswers(config, ex, todayIso());
+    S.example = ex.id;
+    ui.openGroups.clear();
+    ui.scenario = 'expected';
+    changed(true);
+  };
+  const details = h(
+    'details',
+    { class: 'help examples', open: !!ui.examplesOpen },
+    h('summary', null, 'Try an example household'),
+    h('p', { class: 'hint block' }, 'Made-up people with made-up numbers. Picking one fills in the questions below, and you can change anything afterwards.'),
+    h(
+      'div',
+      { class: 'choice stack' },
+      list.map((ex) =>
+        h('button', { type: 'button', class: 'chip' + (S.example === ex.id ? ' on' : ''), 'aria-pressed': S.example === ex.id ? 'true' : 'false', 'data-focus': `example:${ex.id}`, onclick: load(ex) }, h('span', { class: 'chip-label' }, ex.label))
+      )
+    )
+  );
+  details.addEventListener('toggle', () => {
+    ui.examplesOpen = details.open;
+  });
+  return details;
 }
 
 function peopleSection(n, a, current) {

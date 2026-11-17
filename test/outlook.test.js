@@ -315,3 +315,23 @@ test('an open question about a pooled family deductible is settled for this year
   solo.people.pop();
   assert.ok(build(open, solo).problems.some((p) => p.code === 'ded-over'));
 });
+
+// ---- example households ----------------------------------------------------------------------
+const { exampleAnswers } = require('../src/household.js');
+
+test('every example household in the configuration fills the form in and produces a result', () => {
+  assert.ok(config.examples.length >= 3);
+  for (const ex of config.examples) {
+    const a = exampleAnswers(config, ex, '2099-01-01');
+    const hh = build(config, a);
+    assert.deepStrictEqual(hh.problems, [], ex.id);
+    assert.strictEqual(a.people.length, ex.answers.people.length);
+    assert.ok(a.people.every((p) => p.counts && p.oon && Array.isArray(p.regular)), 'people are whole');
+    const out = evaluate(config, hh, { view: 'takehome' });
+    assert.ok(out.plans.every((p) => p.scenarios.expected.lo >= p.scenarios.floor.lo - 0.01), ex.id);
+  }
+  // An example changes only its own copy of the answers.
+  const first = exampleAnswers(config, config.examples[0], '2099-01-01');
+  first.people[0].counts.office = 99;
+  assert.notStrictEqual(exampleAnswers(config, config.examples[0], '2099-01-01').people[0].counts.office, 99);
+});

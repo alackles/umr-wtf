@@ -74,6 +74,27 @@ function defaultAnswers(config, todayIso) {
   };
 }
 
+// An example household from the configuration, as a full set of answers. The configuration
+// holds only what differs from a blank form; people are given in order, with a role.
+function exampleAnswers(config, example, todayIso) {
+  const given = JSON.parse(JSON.stringify((example && example.answers) || {}));
+  const a = defaultAnswers(config, given.asOf || todayIso);
+  if ('currentPlan' in given) a.currentPlan = given.currentPlan;
+  a.people = (given.people || [{ role: 'self' }]).map((p, i) => {
+    const person = newPerson('p' + (i + 1), p.role, p.name);
+    for (const [k, v] of Object.entries(p)) {
+      if (k === 'role' || k === 'name') continue;
+      person[k] = v && typeof v === 'object' && !Array.isArray(v) ? Object.assign({}, person[k], v) : v;
+    }
+    if (!a.currentPlan) person.thisYear = false;
+    return person;
+  });
+  for (const k of ['familyMet', 'gates', 'hsa', 'adv']) Object.assign(a[k], given[k] || {});
+  for (const [k, v] of Object.entries(given.events || {})) Object.assign(a.events[k], v);
+  if (given.priority) a.priority = given.priority;
+  return a;
+}
+
 function typicalAllowed(config, answers) {
   const t = Object.assign({}, config.typicalAllowed);
   for (const [k, v] of Object.entries((answers.adv && answers.adv.typical) || {})) if (num(v) != null) t[k] = num(v);
@@ -659,4 +680,4 @@ function buildFromTable(config, answers, table) {
   });
 }
 
-module.exports = { build, buildFromTable, tableThrough, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts, typicalAllowed };
+module.exports = { build, buildFromTable, tableThrough, defaultAnswers, exampleAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts, typicalAllowed };

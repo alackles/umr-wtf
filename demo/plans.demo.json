@@ -156,8 +156,52 @@
     },
     "accumulators": "Each EOB also shows how much of each deductible and out-of-pocket limit had been used when it was issued.",
     "labels": { "er": ["EMERGENCY"], "preventive": ["IMMUNIZATION"] },
-    "thisYear": "Fern and Moss had the same rules this year as they will next year."
+    "thisYear": "Every plan had the same rules this year as it will next year."
   },
+
+  "examples": [
+    {
+      "id": "ankle",
+      "label": "Single guy who rarely sees a doctor, but broke his ankle this year",
+      "answers": {
+        "asOf": "2098-11-01",
+        "currentPlan": "lichen",
+        "people": [
+          {"role": "self", "name": "Marcus", "usage": "counts", "counts": {"office": 3, "therapy": 6, "urgent": 0, "er": 1}, "dedMet": 2800, "oopMet": 3075}
+        ],
+        "gates": {"rx": false, "regular": false, "oon": false}
+      }
+    },
+    {
+      "id": "family",
+      "label": "Mom covering her spouse and two kids, all with routine care",
+      "answers": {
+        "asOf": "2098-11-01",
+        "currentPlan": "fern",
+        "people": [
+          {"role": "self", "name": "Dana", "usage": "counts", "counts": {"office": 4, "therapy": 0, "urgent": 1, "er": 0}, "dedMet": 130, "oopMet": 255},
+          {"role": "spouse", "name": "Chris", "usage": "counts", "counts": {"office": 2, "therapy": 0, "urgent": 0, "er": 0}, "dedMet": 0, "oopMet": 40},
+          {"role": "child", "name": "Ava", "usage": "counts", "counts": {"office": 3, "therapy": 0, "urgent": 1, "er": 0}, "dedMet": 0, "oopMet": 105},
+          {"role": "child", "name": "Eli", "usage": "checkups", "dedMet": 0, "oopMet": 0}
+        ],
+        "gates": {"rx": false, "regular": false, "oon": false},
+        "adv": {"surcharge": false}
+      }
+    },
+    {
+      "id": "complex",
+      "label": "Sees two specialists a month; their spouse is the picture of health",
+      "answers": {
+        "asOf": "2098-11-01",
+        "currentPlan": "fern",
+        "people": [
+          {"role": "self", "name": "Jordan", "usage": "counts", "counts": {"office": 24, "therapy": 0, "urgent": 1, "er": 0}, "dedMet": 400, "oopMet": 1800, "capMonth": 7, "rx": {"rx_generic": {"fills": 2, "price": null}, "rx_preferred": {"fills": 1, "price": null}}},
+          {"role": "spouse", "name": "Riley", "usage": "checkups", "dedMet": 0, "oopMet": 0}
+        ],
+        "gates": {"rx": true, "regular": false, "oon": false}
+      }
+    }
+  ],
 
   "typicalAllowed": { "office": 180, "therapy": 110, "urgent": 230, "er_facility": 1700, "er_physician": 320 },
   "seriousEvent": {
