@@ -20,6 +20,10 @@ const { CATEGORIES, CATEGORY_LABELS } = require('./plans.js');
 const { replay } = require('./engine.js');
 
 const HEADER = ['person', 'date', 'category', 'allowed', 'network', 'count', 'billed', 'group'];
+// A small model copies the EOB's amounts as printed and the importer adds them: tested, an 8B
+// model read the columns correctly and then gave one of them as the sum. No `billed` column,
+// to keep the row short; an out-of-network row from this prompt loses its balance-billed part.
+const SMALL_HEADER = ['person', 'date', 'category', 'plan_paid', 'copay', 'deductible', 'coinsurance', 'not_covered', 'network', 'count', 'group'];
 
 // How the administrator's EOBs are laid out. A configuration can replace any of this under
 // "claims"; these are neutral stand-ins.
@@ -150,7 +154,7 @@ function planFacts(config, opts = {}) {
 const VISIT = { office: 'an office, specialist or therapy visit', urgent: 'urgent care', teladoc: 'a telehealth visit' };
 
 // How to choose a category, as an ordered list keyed on how this year's plan treated the row.
-function categoryGuide(config, c) {
+function categoryGuide(config, c, small) {
   const current = config.plans.filter((p) => p.currentYearOption);
   const plans = current.length ? current : config.plans;
   const col = c.columns;
@@ -167,11 +171,15 @@ function categoryGuide(config, c) {
   const such = (list) => (list && list.length ? ` (labels such as ${quoted(list)})` : '');
 
   const out = [];
-  out.push(`1. The row has an amount under "${col.notCovered}": \`not_covered\`. Use that amount as \`allowed\`, and say in the \`group\` label what the care was ("ER visit in March, refused").`);
+  out.push(
+    small
+      ? `1. The row has an amount under "${col.notCovered}": \`not_covered\`.`
+      : `1. The row has an amount under "${col.notCovered}": \`not_covered\`. Use that amount as \`allowed\`, and say in the \`group\` label what the care was ("ER visit in March, refused").`
+  );
   out.push(
     `2. The claim is an emergency-room visit: at least one of its rows is labelled as emergency care${such(c.labels.er)}${erSkipsDeductible ? `, and nothing on the claim went to "${col.deductible}"` : ''}. ` +
       'Put the whole claim in as a single row: `er_facility` if the provider is a hospital or other facility, `er_physician` if it is a doctor or a physician group. ' +
-      `Work out \`allowed\` from the "${c.totals}" row. The claim's other rows (drugs, labs, imaging) are part of the visit, and the copay is charged once per visit and can be spread over several rows, which is why the claim goes in whole.`
+      `${small ? `Copy its amounts from the "${c.totals}" row.` : `Work out \`allowed\` from the "${c.totals}" row.`} The claim's other rows (drugs, labs, imaging) are part of the visit, and the copay is charged once per visit and can be spread over several rows, which is why the claim goes in whole.`
   );
   if (byAmount.size) {
     out.push(`3. A copay was charged. Go by the amount under "${col.copay}":`);
@@ -247,10 +255,12 @@ function example(config, c, small) {
   }
   eobText.length -= 2;
 
-  const csv = [HEADER.join(',')];
+  const csv = [(small ? SMALL_HEADER : HEADER).join(',')];
   for (const r of rows) {
     const it = r.item;
-    csv.push([it.person, it.date, it.category, it.allowed.toFixed(2), 'in', it.count === 0 ? '0' : '', '', it.group].join(','));
+    const zero = it.count === 0 ? '0' : '';
+    if (small) csv.push([it.person, it.date, it.category, r.planPaid.toFixed(2), r.copay.toFixed(2), r.ded.toFixed(2), r.coins.toFixed(2), r.nc.toFixed(2), 'in', zero, it.group].join(','));
+    else csv.push([it.person, it.date, it.category, it.allowed.toFixed(2), 'in', zero, '', it.group].join(','));
   }
 
   const col = c.columns;
@@ -261,7 +271,8 @@ function example(config, c, small) {
   why.push(xray.ded > 0 || xray.coins > 0 ? `- The X-ray went to the deductible or coinsurance (${cents(xray.owe)} owed), so it is \`ded_coins\`.` : '- The X-ray was billed on its own, so it is `ded_coins`.');
   why.push(`- The ${prev.toLowerCase()} was paid in full and is preventive care, so it is \`preventive\`.`);
   why.push('- Both hospital rows went to the deductible or coinsurance, so both are `ded_coins`. Each is a row of its own, with an empty `count`.');
-  why.push(
+  if (small) why.push(`- The five amounts in each row are copied from the EOB as printed: "${col.planPaid}", "${col.copay}", "${col.deductible}", "${col.coinsurance}", "${col.notCovered}", in that order. Nothing is added up, and "${col.billed}" is not used.`);
+  else why.push(
     `- In every row, \`allowed\` is "${col.planPaid}" plus "${col.copay}" plus "${col.deductible}" plus "${col.coinsurance}". It is never "${col.billed}". For the first hospital row that is ${cents(proc.planPaid)} + ${cents(proc.copay)} + ${cents(proc.ded)} + ${cents(proc.coins)} = ${cents(proc.item.allowed)}.`
   );
 
@@ -304,6 +315,15 @@ function columnsGuide(c, small) {
     small ? '- `count`: leave empty, except for the 0 that line 5 of the category list asks for.' : '- `count`: leave empty, except for the 0 that line 5 of the category list asks for, and the number of fills on a prescription row.',
     `- \`billed\`: leave empty, except on out-of-network rows, where it is "${col.billed}".`,
   ];
+  if (small) {
+    // The amounts are copied, not added, and there is no `billed` column.
+    out.splice(
+      3,
+      1,
+      `- \`plan_paid\`, \`copay\`, \`deductible\`, \`coinsurance\`, \`not_covered\`: the row's amounts under "${col.planPaid}", "${col.copay}", "${col.deductible}", "${col.coinsurance}" and "${col.notCovered}", copied exactly as printed, without the dollar sign or commas. Write 0.00 where the EOB shows $0.00. Do not add them up, and do not use "${col.billed}".`
+    );
+    out.pop();
+  }
   out.push(
     small
       ? '- `group`: the provider\'s name as the EOB prints it.'
@@ -496,13 +516,13 @@ function smallPrompt(config) {
   const p = [];
   p.push(
     'You are a careful data-entry assistant. Your task is to copy the service rows from medical Explanation of Benefits documents (EOBs) into a CSV table. ' +
-      'Another tool does all the sums afterwards, so copy what each EOB says and do not estimate anything.'
+      'Another tool does all the sums afterwards, so copy what each EOB says. Do not add, subtract or estimate anything.'
   );
   p.push('I will give you a few EOBs at a time. Treat each message on its own.');
 
   p.push('# Reply format');
   p.push('Reply with the CSV first. Start with this header line every time:');
-  p.push(fence(HEADER.join(',')));
+  p.push(fence(SMALL_HEADER.join(',')));
   p.push('After the CSV, write "Guesses:" and list any rows where you were not sure of the category. If there are none, write "Guesses: none". Write nothing else.');
 
   p.push('# The columns');
@@ -512,7 +532,7 @@ function smallPrompt(config) {
 
   p.push('# Choosing the category');
   p.push('Use the first line that fits:');
-  p.push(categoryGuide(config, c));
+  p.push(categoryGuide(config, c, true));
 
   p.push('# Example');
   p.push('EOBs:');
@@ -539,4 +559,4 @@ function agentPrompt(config, kind) {
   throw new Error(`no prompt of kind "${kind}"`);
 }
 
-module.exports = { agentPrompt, planFacts, ruleText, example, eobTable, claimsWording, KINDS, HEADER };
+module.exports = { agentPrompt, planFacts, ruleText, example, eobTable, claimsWording, KINDS, HEADER, SMALL_HEADER };

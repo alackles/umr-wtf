@@ -5,7 +5,10 @@
 
 const { CATEGORIES } = require('./plans.js');
 
-const COLUMNS = ['person', 'date', 'month', 'category', 'allowed', 'network', 'count', 'billed', 'group'];
+// A row can give the allowed amount, or the amounts an EOB prints for the row, which add up
+// to it. Adding is the page's job: whoever fills the table in, person or model, only copies.
+const AMOUNTS = ['plan_paid', 'copay', 'deductible', 'coinsurance', 'not_covered'];
+const COLUMNS = ['person', 'date', 'month', 'category', 'allowed'].concat(AMOUNTS, ['network', 'count', 'billed', 'group']);
 
 function parseCsv(text) {
   const rows = [];
@@ -83,9 +86,29 @@ function readRecord(rec, where, errors) {
   if (!CATEGORIES.includes(category)) errors.push(`${where}: category "${rec.category == null ? '' : rec.category}" is not one of ${CATEGORIES.join(', ')}`);
   item.category = category;
 
-  const allowed = money(rec.allowed);
-  if (allowed == null || isNaN(allowed) || allowed < 0) errors.push(`${where}: allowed "${rec.allowed == null ? '' : rec.allowed}" is not an amount of zero or more`);
-  item.allowed = allowed;
+  const filled = (k) => rec[k] != null && String(rec[k]).trim() !== '';
+  const parts = AMOUNTS.filter(filled);
+  if (parts.length) {
+    let sum = 0;
+    let clean = true;
+    for (const k of parts) {
+      const v = money(rec[k]);
+      if (v == null || isNaN(v) || v < 0) {
+        errors.push(`${where}: ${k} "${rec[k]}" is not an amount of zero or more`);
+        clean = false;
+      } else sum += v;
+    }
+    sum = Math.round(sum * 100) / 100;
+    if (clean && filled('allowed')) {
+      const stated = money(rec.allowed);
+      if (isNaN(stated) || Math.abs(stated - sum) > 0.005) errors.push(`${where}: allowed "${rec.allowed}" is not the sum of the amounts beside it (${sum.toFixed(2)})`);
+    }
+    item.allowed = sum;
+  } else {
+    const allowed = money(rec.allowed);
+    if (allowed == null || isNaN(allowed) || allowed < 0) errors.push(`${where}: allowed "${rec.allowed == null ? '' : rec.allowed}" is not an amount of zero or more`);
+    item.allowed = allowed;
+  }
 
   const network = String(rec.network == null ? '' : rec.network).trim().toLowerCase();
   if (network === '' || network === 'in' || network === 'in-network') item.network = 'in';
@@ -134,7 +157,8 @@ function parseTable(text) {
     const rows = parseCsv(src);
     const head = rows[0].map((c) => c.trim().toLowerCase());
     for (const c of head) if (!COLUMNS.includes(c)) errors.push(`header: unknown column "${c}". Expected: ${COLUMNS.join(', ')}`);
-    for (const need of ['person', 'category', 'allowed']) if (!head.includes(need)) errors.push(`header: column "${need}" is missing`);
+    for (const need of ['person', 'category']) if (!head.includes(need)) errors.push(`header: column "${need}" is missing`);
+    if (!head.includes('allowed') && !AMOUNTS.some((k) => head.includes(k))) errors.push(`header: needs an "allowed" column, or the EOB's own amounts (${AMOUNTS.join(', ')})`);
     if (!head.includes('month') && !head.includes('date')) errors.push('header: needs a "date" or a "month" column');
     if (errors.length) return { items: [], errors };
     records = rows.slice(1).map((r) => Object.fromEntries(head.map((c, i) => [c, r[i]])));
@@ -180,4 +204,4 @@ function toCsv(items) {
   return lines.join('\n') + '\n';
 }
 
-module.exports = { parseTable, parseCsv, toCsv, addItems, COLUMNS };
+module.exports = { parseTable, parseCsv, toCsv, addItems, COLUMNS, AMOUNTS };

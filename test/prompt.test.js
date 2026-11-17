@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { agentPrompt, planFacts, ruleText, example, claimsWording, HEADER } = require('../src/prompt.js');
+const { agentPrompt, planFacts, ruleText, example, claimsWording, HEADER, SMALL_HEADER } = require('../src/prompt.js');
 const { parseTable, addItems, COLUMNS } = require('../src/importer.js');
 const { validateConfig, CATEGORIES, clone } = require('../src/plans.js');
 const { replay } = require('../src/engine.js');
@@ -30,14 +30,34 @@ for (const [kind, after] of [['frontier', 'The table for them:'], ['small', 'Rep
     const owed = replay(items, ex.plan, { family: true }).total;
     const printed = ex.rows.reduce((s, r) => s + r.owe, 0);
     assert.ok(Math.abs(owed - printed) < 0.005, `replay ${owed} vs example EOBs ${printed}`);
-    for (const r of ex.rows) assert.ok(text.includes(`,${r.item.allowed.toFixed(2)},`), 'each allowed amount is in the example table');
+    // The small prompt's table carries the EOB's amounts, which the importer adds up.
+    items.forEach((it, i) => assert.ok(Math.abs(it.allowed - ex.rows[i].item.allowed) < 0.005, `row ${i + 1} comes to ${it.allowed}, the example means ${ex.rows[i].item.allowed}`));
     assert.ok(ex.rows.some((r) => r.planPaid > 0 && r.ded > 0 && r.coins > 0), 'one example row is split between the plan, the deductible and coinsurance');
   });
 }
 
 test('the header the prompts ask for is one the importer accepts', () => {
-  for (const c of HEADER) assert.ok(COLUMNS.includes(c), c);
-  for (const kind of ['frontier', 'small']) assert.ok(agentPrompt(config, kind).includes(HEADER.join(',')));
+  for (const c of HEADER.concat(SMALL_HEADER)) assert.ok(COLUMNS.includes(c), c);
+  assert.ok(agentPrompt(config, 'frontier').includes(HEADER.join(',')));
+  const small = agentPrompt(config, 'small');
+  assert.ok(small.includes(SMALL_HEADER.join(',')));
+  assert.ok(!SMALL_HEADER.includes('allowed') && !small.includes(HEADER.join(',')), 'the small prompt never asks for a sum');
+});
+
+test('a row can give the EOB\'s amounts in place of the allowed amount, and the importer adds them', () => {
+  const head = 'person,month,category,plan_paid,copay,deductible,coinsurance,not_covered\n';
+  const { items, errors } = parseTable(head + 'Sam,6,ded_coins,556.58,0.00,245.20,98.22,0.00\nSam,7,not_covered,0.00,0.00,0.00,0.00,310.00\nSam,8,office,"$1,094.60",20,,,\n');
+  assert.deepStrictEqual(errors, []);
+  assert.deepStrictEqual(items.map((it) => it.allowed), [900, 310, 1114.6]);
+  assert.ok(items.every((it) => !('plan_paid' in it) && !('copay' in it)), 'only the sum is kept');
+  // Both given: they have to agree.
+  assert.deepStrictEqual(parseTable('person,month,category,allowed,plan_paid,copay\nSam,1,office,114.60,94.60,20\n').errors, []);
+  const off = parseTable('person,month,category,allowed,plan_paid,copay\nSam,1,office,212,94.60,20\n');
+  assert.deepStrictEqual(off.items, []);
+  assert.ok(/not the sum of the amounts beside it \(114\.60\)/.test(off.errors[0]));
+  // Neither given, or an amount that is not one: reported.
+  assert.ok(/needs an "allowed" column/.test(parseTable('person,month,category\nSam,1,office\n').errors.join(' ')));
+  assert.ok(/copay "lots" is not an amount/.test(parseTable(head + 'Sam,6,office,90,lots,,,\n').errors.join(' ')));
 });
 
 const deductible = (p) => `$${p.in.ded[0].toLocaleString('en-US')} / $${p.in.ded[1].toLocaleString('en-US')}`;

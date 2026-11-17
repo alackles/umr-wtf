@@ -637,7 +637,7 @@ function formatHelp() {
       h('li', null, h('code', null, 'person'), ' a name, matching "Who is covered"'),
       h('li', null, h('code', null, 'month'), ' 1 to 12, or ', h('code', null, 'date'), ' as YYYY-MM-DD'),
       h('li', null, h('code', null, 'category'), ' one of: ', CATEGORIES.join(', ')),
-      h('li', null, h('code', null, 'allowed'), ' the plan\'s allowed amount for the line (plan paid plus what you owed)'),
+      h('li', null, h('code', null, 'allowed'), ' the plan\'s allowed amount for the line (plan paid plus what you owed). Or leave it out and give the EOB\'s own amounts for the line, which the page adds up: ', h('code', null, 'plan_paid'), ', ', h('code', null, 'copay'), ', ', h('code', null, 'deductible'), ', ', h('code', null, 'coinsurance'), ', ', h('code', null, 'not_covered')),
       h('li', null, h('code', null, 'network'), ' in or out (blank means in)'),
       h('li', null, h('code', null, 'count'), ' optional: visits or fills the line stands for. Use 0 for an extra line on a visit already counted, such as a lab drawn at an office visit'),
       h('li', null, h('code', null, 'billed'), ' optional, out-of-network only: what the provider charged'),
