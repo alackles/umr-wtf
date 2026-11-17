@@ -15,6 +15,7 @@ const { itemsTable } = require('./table.js');
 
 const STORE_VERSION = 1;
 let config;
+let extras = {}; // text carried with the configuration for the page to show: { downloader }
 let S; // { v, mode: 'A' | 'B', answers, table: { items, groupsOff }, importText, importErrors }
 const ui = { openGroups: new Set(), advOpen: false, promptOpen: {}, uid: 1, scenario: 'expected' };
 let formEl;
@@ -623,8 +624,62 @@ function eventsSection(n, a, next) {
 }
 
 // ---- the claims tab: get the EOBs, hand them to an agent, bring the table back, check it ------
+// When the configuration carries a downloader script, this section offers it two ways: as a
+// link to drag to the bookmarks bar, and as text to copy into the browser's console. The page
+// only shows the script. It runs on the administrator's site, never here.
 function getEobsSection(n) {
-  return section(n, 'Get your EOBs', claimsWording(config).where, h('p', { class: 'hint block' }, 'A script that downloads them all in one go is planned and not built yet.'));
+  const words = claimsWording(config);
+  const script = extras.downloader;
+  if (!script) return section(n, 'Get your EOBs', words.where);
+  const open = (words.downloader && words.downloader.open) || 'Log in to the member site on a computer and open its list of EOBs.';
+  const note = h('span', { class: 'hint', role: 'status' });
+  const bookmark = h(
+    'a',
+    {
+      class: 'btn bookmark',
+      href: 'javascript:' + encodeURIComponent(script + '\nvoid 0;'),
+      draggable: 'true',
+      'data-focus': 'bookmark',
+      onclick: (e) => {
+        e.preventDefault();
+        note.textContent = 'Drag it up to the bookmarks bar. Clicking it here does nothing.';
+      },
+    },
+    'Download my EOBs'
+  );
+  return section(
+    n,
+    'Get your EOBs',
+    words.where,
+    h(
+      'ol',
+      { class: 'steps' },
+      h('li', null, open),
+      h(
+        'li',
+        null,
+        'Run the downloader on that page, in either of two ways.',
+        h(
+          'ul',
+          null,
+          h(
+            'li',
+            null,
+            h('b', null, 'As a bookmark. '),
+            'Drag this to your bookmarks bar, then click it there while you\'re on that page: ',
+            bookmark,
+            ' ',
+            note,
+            h('span', { class: 'hint block' }, 'No bookmarks bar? Ctrl+Shift+B shows it, or Cmd+Shift+B on a Mac.')
+          ),
+          h('li', null, h('b', null, 'In the console. '), 'Copy the script below. On that page press F12 (Cmd+Option+J on a Mac), pick Console, paste, and press Enter. The first time, Chrome asks you to type "allow pasting".')
+        )
+      ),
+      h('li', null, 'A panel opens at the top right of that page. Pick the dates and press Download. It takes about two and a half seconds for each EOB, and saves them all as one zip file. Unzip it.')
+    ),
+    h('p', null, 'The script runs in your own browser, in the session you logged in to. It asks for each EOB the way opening one by hand does, and sends nothing anywhere else.'),
+    promptBlock('downloader', script, 'Read and copy the script', 'javascript', 'script')
+  );
 }
 
 // What a table of line items has to look like. Shown to someone typing their own, and beside the import box.
@@ -675,8 +730,9 @@ function copyOut(text, done) {
 // A prompt, behind one expander: a fixed-height box that scrolls and wraps its lines so the
 // prompt can be read in place, with a small Copy button in its top-right corner. If copying
 // is refused, the text is selected so it can be copied by hand.
-function promptBlock(key, text, label) {
-  const view = h('pre', { id: `prompt-${key}`, class: 'prompt-view', tabindex: '0', 'aria-label': label });
+function promptBlock(key, text, label, kind = 'markdown', noun = 'prompt') {
+  // A prompt is prose and wraps; a script keeps its lines and scrolls sideways.
+  const view = h('pre', { id: `prompt-${key}`, class: 'prompt-view' + (noun === 'script' ? ' code' : ''), tabindex: '0', 'aria-label': label });
   view.textContent = text;
   const status = h('span', { class: 'hint', role: 'status' });
   const copy = h(
@@ -700,7 +756,7 @@ function promptBlock(key, text, label) {
           const range = document.createRange();
           range.selectNodeContents(view);
           sel.addRange(range);
-          status.textContent = 'Could not copy from here. The prompt is selected: press Ctrl+C, or Cmd+C on a Mac.';
+          status.textContent = `Could not copy from here. The ${noun} is selected: press Ctrl+C, or Cmd+C on a Mac.`;
         }),
     },
     'Copy'
@@ -709,7 +765,7 @@ function promptBlock(key, text, label) {
     'details',
     { class: 'help prompt', open: !!ui.promptOpen[key] },
     h('summary', null, label),
-    h('div', { class: 'prompt-box' }, h('div', { class: 'prompt-head' }, h('span', null, 'markdown'), copy), view),
+    h('div', { class: 'prompt-box' }, h('div', { class: 'prompt-head' }, h('span', null, kind), copy), view),
     status
   );
   details.addEventListener('toggle', () => {
@@ -1579,8 +1635,9 @@ function header() {
   );
 }
 
-function start(rawConfig) {
+function start(rawConfig, carried) {
   config = validateConfig(rawConfig);
+  extras = carried || {};
   S = load() || fresh();
   if (S.answers.priority === 'protect') ui.scenario = 'bad'; // the year a saved choice is about
   const app = clear(document.getElementById('app'));
@@ -1612,8 +1669,9 @@ if (typeof document !== 'undefined') {
   const plain = document.getElementById('plan-config');
   const sealed = document.getElementById('sealed-config');
   try {
-    if (plain) start(JSON.parse(plain.textContent));
-    else require('./unlock.js').boot(JSON.parse(sealed.textContent), (payload) => start(payload.config), header).catch(fail);
+    const carried = document.getElementById('plan-extras');
+    if (plain) start(JSON.parse(plain.textContent), carried ? JSON.parse(carried.textContent) : {});
+    else require('./unlock.js').boot(JSON.parse(sealed.textContent), (payload) => start(payload.config, payload.extras), header).catch(fail);
   } catch (e) {
     fail(e);
   }
