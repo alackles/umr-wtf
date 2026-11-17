@@ -1129,6 +1129,9 @@ function renderResults() {
     })
   );
 
+  // The chart in words, collected here and shown, collapsed, after the assumptions.
+  const explain = [];
+
   // The trade, as a table: each plan against the one that takes least from each paycheck.
   if (out.plans.length > 1) {
     const tt = tradeTable(out);
@@ -1144,10 +1147,10 @@ function renderResults() {
       if (r.hi <= 0) return `${d(r.hi)} to ${d(r.lo)} lower`;
       return `${d(r.lo)} lower to ${d(r.hi)} higher`;
     };
-    resultsEl.appendChild(
+    explain.push(
       h(
         'div',
-        { class: 'block' },
+        { class: 'explain-part' },
         h('h3', null, 'The trade'),
         h('p', { class: 'trade-base' }, `Compared with ${nameOf(tt.base)}, which takes the least from each paycheck:`),
         h(
@@ -1178,10 +1181,10 @@ function renderResults() {
   }
 
   // How far off the estimate could be before a different plan cost least.
-  resultsEl.appendChild(
+  explain.push(
     h(
       'div',
-      { class: 'block sens' },
+      { class: 'explain-part sens' },
       h('h3', null, 'If your estimate is off'),
       sensitivityLines(res.sens, (id) => out.plans.find((p) => p.id === id).name).map((line) => h('p', null, line))
     )
@@ -1203,6 +1206,14 @@ function renderResults() {
   }
   if (hh.notes.length) resultsEl.appendChild(h('ul', { class: 'notes' }, hh.notes.map((nt) => h('li', null, nt.text))));
 
+  // For people who want the numbers: the chart in words, then as a table, then the line items.
+  // Open sections stay open while answers change.
+  const explainHost = h('details', { class: 'block', open: ui.explainOpen }, h('summary', null, 'Explain the chart to me in words'), explain);
+  explainHost.addEventListener('toggle', () => {
+    ui.explainOpen = explainHost.open;
+  });
+  resultsEl.appendChild(explainHost);
+
   // The numbers as a table.
   const table = h(
     'table',
@@ -1214,7 +1225,11 @@ function renderResults() {
       out.plans.map((p) => h('tr', null, h('th', { scope: 'row' }, p.name), SCENARIOS.map((s) => h('td', null, dollarsRange(p.scenarios[s]))), h('td', null, dollars(p.paycheck.total))))
     )
   );
-  resultsEl.appendChild(h('details', { class: 'block' }, h('summary', null, 'The numbers as a table'), h('div', { class: 'rows-wrap' }, table)));
+  const tableHost = h('details', { class: 'block', open: ui.tableOpen }, h('summary', null, 'The numbers as a table'), h('div', { class: 'rows-wrap' }, table));
+  tableHost.addEventListener('toggle', () => {
+    ui.tableOpen = tableHost.open;
+  });
+  resultsEl.appendChild(tableHost);
 
   // The line items behind the questionnaire.
   if (S.mode === 'A') {

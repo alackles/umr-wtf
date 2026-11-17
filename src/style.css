@@ -286,6 +286,8 @@ table.trade tbody th { font-weight: 600; white-space: nowrap; }
 .results a { color: var(--accent); text-underline-offset: 2px; }
 .waiting li .row-actions { margin-top: 6px; }
 .sens { font-size: 14.5px; }
+.explain-part { margin-top: 10px; }
+.explain-part h3 { font-size: 14.5px; margin: 0 0 4px; }
 .sens p { margin: 2px 0; }
 .assuming { font-size: 14px; background: var(--sunk); border-radius: 8px; padding: 10px 12px; }
 .notes { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--ink-2); display: grid; gap: 4px; }
