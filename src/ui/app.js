@@ -672,35 +672,50 @@ function copyOut(text, done) {
   else oldWay();
 }
 
-// A prompt with a button to copy it and a collapsed box to read it in. If copying fails, the
-// box opens with the text selected, so it can be copied by hand.
-function promptBlock(key, text, copyLabel, readLabel) {
-  const box = h('textarea', { id: `prompt-${key}`, class: 'prompt-text', rows: '14', readonly: true, spellcheck: 'false', 'aria-label': readLabel });
-  box.value = text;
-  const details = h('details', { class: 'help', open: !!ui.promptOpen[key] }, h('summary', null, readLabel), box);
-  details.addEventListener('toggle', () => {
-    ui.promptOpen[key] = details.open;
-  });
+// A prompt, behind one expander: a fixed-height box that scrolls and wraps its lines so the
+// prompt can be read in place, with a small Copy button in its top-right corner. If copying
+// is refused, the text is selected so it can be copied by hand.
+function promptBlock(key, text, label) {
+  const view = h('pre', { id: `prompt-${key}`, class: 'prompt-view', tabindex: '0', 'aria-label': label });
+  view.textContent = text;
   const status = h('span', { class: 'hint', role: 'status' });
   const copy = h(
     'button',
     {
       type: 'button',
-      class: 'btn primary',
+      class: 'copy',
       'data-focus': `copy-${key}`,
       onclick: () =>
         copyOut(text, (ok) => {
-          status.textContent = ok ? 'Copied.' : 'Could not copy from here. The prompt is selected below: press Ctrl+C, or Cmd+C on a Mac.';
-          if (!ok) {
-            details.open = true;
-            box.focus();
-            box.select();
+          if (ok) {
+            copy.textContent = 'Copied';
+            status.textContent = '';
+            setTimeout(() => {
+              copy.textContent = 'Copy';
+            }, 2 * 1000);
+            return;
           }
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          const range = document.createRange();
+          range.selectNodeContents(view);
+          sel.addRange(range);
+          status.textContent = 'Could not copy from here. The prompt is selected: press Ctrl+C, or Cmd+C on a Mac.';
         }),
     },
-    copyLabel
+    'Copy'
   );
-  return [h('div', { class: 'row-actions' }, copy, status), details];
+  const details = h(
+    'details',
+    { class: 'help prompt', open: !!ui.promptOpen[key] },
+    h('summary', null, label),
+    h('div', { class: 'prompt-box' }, h('div', { class: 'prompt-head' }, h('span', null, 'markdown'), copy), view),
+    status
+  );
+  details.addEventListener('toggle', () => {
+    ui.promptOpen[key] = details.open;
+  });
+  return details;
 }
 
 function agentPanel() {
@@ -727,7 +742,7 @@ function agentPanel() {
       { id: 'prompt-kind', aria: 'Which kind of agent' }
     ),
     h('p', { class: 'hint block' }, how, ' The prompt carries the plan details from this page, so every agent works from the same numbers.'),
-    promptBlock('table', agentPrompt(config, kind), 'Copy the prompt', 'Read the prompt'),
+    promptBlock('table', agentPrompt(config, kind), 'Read and copy the prompt'),
     kind === 'frontier'
       ? [
           h(
@@ -736,7 +751,7 @@ function agentPanel() {
             h('b', null, 'Or get advice from your agent directly.'),
             ' You can also leave the page here and talk the choice through with your agent. This second prompt gives it all the plans and their premiums and asks it to work out each plan\'s cost from your table.'
           ),
-          promptBlock('advice', agentPrompt(config, 'advice'), 'Copy the advice prompt', 'Read the advice prompt'),
+          promptBlock('advice', agentPrompt(config, 'advice'), 'Read and copy the advice prompt'),
         ]
       : null,
   ];
