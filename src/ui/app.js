@@ -1351,7 +1351,11 @@ function start(rawConfig) {
   app.appendChild(
     h('p', { class: 'lede' }, `For ${config.audience || 'people'} choosing between ${config.plans.map((p) => p.name).join(', ').replace(/, ([^,]*)$/, ' and $1')} for ${config.planYear}.`)
   );
-  if (config.hints && config.hints.alert) app.appendChild(h('p', { class: 'alert page-alert' }, config.hints.alert));
+  if (config.hints && config.hints.alert) {
+    // A leading shout ("ALERT!") is set in bold; the rest is plain.
+    const [, lead, rest] = /^(\S+!)?\s*([\s\S]*)$/.exec(config.hints.alert);
+    app.appendChild(h('p', { class: 'page-alert' }, lead ? h('b', null, lead) : null, lead ? ' ' : null, rest));
+  }
   formEl = h('form', { class: 'form', onsubmit: (e) => e.preventDefault(), novalidate: true });
   resultsEl = h('div', { class: 'results', 'aria-live': 'polite' });
   app.appendChild(h('main', { class: 'layout' }, formEl, h('aside', { class: 'results-col', id: 'results' }, resultsEl)));
