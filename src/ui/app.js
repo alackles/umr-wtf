@@ -189,17 +189,6 @@ function renderForm() {
     )
   );
 
-  if (S.mode === 'B') {
-    formEl.appendChild(
-      h(
-        'div',
-        { class: 'alert path-alert' },
-        h('b', null, 'PROCEED WITH CAUTION.'),
-        ' This pathway assumes you want to download ALL of your family\'s medical information from the past year and feed it to an AI agent of your choice. In some cases this may be a logical thing to do (e.g., you have a complex medical situation AND you already have an AI agent tightly integrated into your personal life or are not worried about sending this information to a private tech company). However, you should be certain this is what you want to do before you do it. ',
-        h('b', null, 'If you aren\'t sure, use the other tab.')
-      )
-    );
-  }
   if (S.mode === 'A') {
     formEl.appendChild(peopleSection(n++, a, current));
     formEl.appendChild(thisYearSection(n++, a, current, onPlan));
@@ -705,6 +694,13 @@ function agentPanel() {
       ? 'Small models usually cannot open PDFs, so turn each EOB into text first and paste a few at a time under the prompt. Each reply is a piece of the table: add each piece in the next step.'
       : 'Start a new chat, paste the prompt, and attach your EOBs. If they will not all fit in one message, send them in batches; the prompt tells the agent to expect that. It will ask you a few questions and then give you a table to bring back here.';
   return [
+    h(
+      'div',
+      { class: 'alert' },
+      h('b', null, 'PROCEED WITH CAUTION.'),
+      ' This pathway assumes you want to download ALL of your family\'s medical information from the past year and feed it to an AI agent of your choice. In some cases this may be a logical thing to do (e.g., you have a complex medical situation AND you already have an AI agent tightly integrated into your personal life or are not worried about sending this information to a private tech company). However, you should be certain this is what you want to do before you do it. ',
+      h('b', null, 'If you aren\'t sure, use the other tab.')
+    ),
     choice(
       PROMPT_KINDS,
       kind,
