@@ -21,7 +21,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { validateConfig } = require('../src/plans.js');
 const { replay } = require('../src/engine.js');
-const { claimsWording, HEADER } = require('../src/prompt.js');
+const { claimsWording, eobTable, HEADER } = require('../src/prompt.js');
 
 const PEOPLE = { jo: 'JO OKAFOR', mika: 'MIKA OKAFOR', tess: 'TESS OKAFOR' };
 const first = (who) => PEOPLE[who].split(' ')[0].replace(/^(.)(.*)$/, (m, a, b) => a + b.toLowerCase());
@@ -153,8 +153,6 @@ function makeSet(config) {
       const shown = rows.map((r, i) => (early && i === rows.length - 1 ? Object.assign({}, r, { planPaid: 0, discount: 0, nc: r.billed, owe: r.billed, pct: '', denied: true }) : r));
       const out = isOut(shown);
       const total = (k) => r2(shown.reduce((s, r) => s + r[k], 0));
-      const W = [26, 6, 10, 12, 12, 10, 5, 12, 10, 12, 12, 12, 12];
-      const line = (cells) => cells.map((v, i) => (i === 0 ? String(v).padEnd(W[i]) : String(v).padStart(W[i]))).join(' ').trimEnd();
       const text = [];
       text.push('Explanation of benefits (EOB)', '');
       text.push('This is not a bill. This is an overview of a claim we have processed for you.', '');
@@ -167,12 +165,8 @@ function makeSet(config) {
       text.push(`Employee: ${PEOPLE.jo}        Employer Name: ${config.employer}        Notice Date: ${notice(cl, early ? 9 : cl.reprocessed ? 34 : 9)}`, '');
       text.push(`${'Patient:'.padEnd(28)}${'Claim Number:'.padEnd(20)}Provider Name:`);
       text.push(`${PEOPLE[cl.who].padEnd(28)}${cl.number.padEnd(20)}${cl.provider}`, '');
-      text.push(line([c.table, 'Code', 'Date(s)', col.billed, col.discount, 'Not allowed', '%', col.planPaid, col.copay, col.deductible, col.coinsurance, col.notCovered, col.owe]));
-      for (const r of shown) {
-        const code = r.denied || r.category === 'not_covered' ? 'B7' : out ? 'A2' : 'A1';
-        text.push(line([r.service, code, `${p2(cl.m)}/${p2(cl.d)}/${String(year).slice(2)}`, usd(r.billed), usd(r.discount), usd(r.notAllowed), r.pct, usd(r.planPaid), usd(r.copay), usd(r.ded), usd(r.coins), usd(r.nc), usd(r.owe)]));
-      }
-      text.push(line([c.totals, '', '', usd(total('billed')), usd(total('discount')), usd(total('notAllowed')), '', usd(total('planPaid')), usd(total('copay')), usd(total('ded')), usd(total('coins')), usd(total('nc')), usd(total('owe'))]), '');
+      const stamp = `${p2(cl.m)}/${p2(cl.d)}/${String(year).slice(2)}`;
+      text.push(eobTable(c, shown.map((r) => Object.assign({}, r, { date: stamp, code: r.denied || r.category === 'not_covered' ? 'B7' : out ? 'A2' : 'A1' }))), '');
       text.push('Reason code explanations:');
       if (shown.some((r) => !r.denied && r.category !== 'not_covered')) {
         text.push(out ? ' A2   Your claim was processed at the out-of-network level of benefits. The provider may bill you for the amount not allowed.' : ' A1   Provider negotiated discount. You are not responsible for this amount.', out ? '' : '      Your claim was processed at the in-network level of benefits.');

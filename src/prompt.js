@@ -190,41 +190,62 @@ function categoryGuide(config, c) {
   return out.join('\n');
 }
 
-// The worked example: three invented EOBs and the rows they become. The amounts each row was
-// charged come from replaying the rows under a configured plan.
+// One EOB's service table as fixed-width text, the way it comes out of a PDF. `rows` carry
+// billed, discount, notAllowed, pct, planPaid, copay, ded, coins, nc, owe, plus service, code
+// and date. The example below and the made-up EOB set both use this, so an agent that learns
+// from the example sees the same layout in the documents.
+function eobTable(c, rows) {
+  const col = c.columns;
+  const money = (n) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const sum = (k) => Math.round(rows.reduce((s, r) => s + r[k], 0) * 100) / 100;
+  const cells = (r) => [r.service, r.code, r.date, money(r.billed), money(r.discount), money(r.notAllowed), r.pct, money(r.planPaid), money(r.copay), money(r.ded), money(r.coins), money(r.nc), money(r.owe)];
+  const grid = [
+    [c.table, 'Code', 'Date(s)', col.billed, col.discount, 'Not allowed', '%', col.planPaid, col.copay, col.deductible, col.coinsurance, col.notCovered, col.owe],
+    ...rows.map(cells),
+    [c.totals, '', '', money(sum('billed')), money(sum('discount')), money(sum('notAllowed')), '', money(sum('planPaid')), money(sum('copay')), money(sum('ded')), money(sum('coins')), money(sum('nc')), money(sum('owe'))],
+  ];
+  const width = grid[0].map((_, i) => Math.max(...grid.map((g) => String(g[i]).length)));
+  return grid.map((g) => g.map((v, i) => (i === 0 ? String(v).padEnd(width[i]) : String(v).padStart(width[i]))).join('  ').trimEnd()).join('\n');
+}
+
+// The worked example: four invented EOBs and the rows they become. What each row was charged
+// comes from replaying the rows under a configured plan. Between them the EOBs show a visit
+// with a copay, a row that rides on it, a row that goes wholly to the deductible, a row split
+// between the plan, the deductible and coinsurance, and preventive care.
 function example(config, c, small) {
   const plan = config.plans.find((p) => p.currentYearOption) || config.plans[0];
   const year = config.planYear - 1;
   const prev = (c.labels.preventive && c.labels.preventive[0]) || 'IMMUNIZATION';
+  const g = (provider, label) => (small ? provider : label);
   const src = [
-    { eob: 1, patient: 'SAM RIVERA', provider: 'NORTHSIDE FAMILY CLINIC', service: 'PHYSICIAN VISIT', billed: 212, item: { person: 'Sam', date: `${year}-03-11`, category: 'office', allowed: 114.6, group: small ? 'Northside Family Clinic' : 'office visits' } },
-    { eob: 1, patient: 'SAM RIVERA', provider: 'NORTHSIDE FAMILY CLINIC', service: 'DIAGNOSTIC LAB', billed: 58, item: { person: 'Sam', date: `${year}-03-11`, category: 'office', allowed: 36.25, count: 0, group: small ? 'Northside Family Clinic' : 'office visits' } },
-    { eob: 2, patient: 'SAM RIVERA', provider: 'LAKESHORE HOSPITAL', service: 'DIAGNOSTIC X-RAY', billed: 340, item: { person: 'Sam', date: `${year}-04-02`, category: 'ded_coins', allowed: 154.8, group: small ? 'Lakeshore Hospital' : 'knee X-ray in April' } },
-    { eob: 3, patient: 'ADA RIVERA', provider: 'NORTHSIDE FAMILY CLINIC', service: prev, billed: 96, item: { person: 'Ada', date: `${year}-04-20`, category: 'preventive', allowed: 65.9, group: small ? 'Northside Family Clinic' : 'checkups and vaccines' } },
+    { eob: 1, patient: 'SAM RIVERA', provider: 'NORTHSIDE FAMILY CLINIC', service: 'PHYSICIAN VISIT', billed: 212, item: { person: 'Sam', date: `${year}-03-11`, category: 'office', allowed: 114.6, group: g('Northside Family Clinic', 'office visits') } },
+    { eob: 1, patient: 'SAM RIVERA', provider: 'NORTHSIDE FAMILY CLINIC', service: 'DIAGNOSTIC LAB', billed: 58, item: { person: 'Sam', date: `${year}-03-11`, category: 'office', allowed: 36.25, count: 0, group: g('Northside Family Clinic', 'office visits') } },
+    { eob: 2, patient: 'SAM RIVERA', provider: 'VALLEY IMAGING', service: 'DIAGNOSTIC X-RAY', billed: 340, item: { person: 'Sam', date: `${year}-04-02`, category: 'ded_coins', allowed: 154.8, group: g('Valley Imaging', 'knee X-ray in April') } },
+    { eob: 3, patient: 'ADA RIVERA', provider: 'NORTHSIDE FAMILY CLINIC', service: prev, billed: 96, item: { person: 'Ada', date: `${year}-04-20`, category: 'preventive', allowed: 65.9, group: g('Northside Family Clinic', 'checkups and vaccines') } },
+    { eob: 4, patient: 'SAM RIVERA', provider: 'LAKESHORE HOSPITAL', service: 'MEDICAL SERVICE', billed: 2160, item: { person: 'Sam', date: `${year}-06-09`, category: 'ded_coins', allowed: 900, group: g('Lakeshore Hospital', 'hospital procedure in June') } },
+    { eob: 4, patient: 'SAM RIVERA', provider: 'LAKESHORE HOSPITAL', service: 'DRUGS', billed: 310, item: { person: 'Sam', date: `${year}-06-09`, category: 'ded_coins', allowed: 120.5, group: g('Lakeshore Hospital', 'hospital procedure in June') } },
   ];
   const res = replay(src.map((s) => s.item), plan, { family: true });
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const mdy = (iso) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(2, 4)}`;
   const rows = src.map((s, i) => {
     const l = res.lines.find((x) => x.index === i);
-    const r2 = (n) => Math.round(n * 100) / 100;
     const copay = r2(l.copay);
     const ded = r2(l.ded);
     const coins = r2(l.coins);
-    return Object.assign({}, s, { copay, ded, coins, owe: r2(copay + ded + coins), planPaid: r2(s.item.allowed - copay - ded - coins), discount: r2(s.billed - s.item.allowed) });
+    const planPaid = r2(s.item.allowed - copay - ded - coins);
+    const rest = s.item.allowed - copay - ded;
+    return Object.assign({}, s, { code: 'A1', date: mdy(s.item.date), copay, ded, coins, nc: 0, notAllowed: 0, planPaid, owe: r2(copay + ded + coins), discount: r2(s.billed - s.item.allowed), pct: planPaid > 0 && rest > 0 ? String(Math.round((planPaid / rest) * 100)) : '' });
   });
 
-  const col = c.columns;
-  const mdy = (iso) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(2, 4)}`;
   const eobText = [];
-  for (const n of [1, 2, 3]) {
+  for (const n of [1, 2, 3, 4]) {
     const mine = rows.filter((r) => r.eob === n);
-    const sum = (k) => cents(mine.reduce((s, r) => s + r[k], 0));
-    eobText.push(`EOB ${n}. Patient: ${mine[0].patient}. Provider: ${mine[0].provider}.`);
-    eobText.push([c.table, 'Service date', col.billed, col.discount, col.planPaid, col.copay, col.deductible, col.coinsurance, col.notCovered, col.owe].join(' | '));
-    for (const r of mine) eobText.push([r.service, mdy(r.item.date), cents(r.billed), cents(r.discount), cents(r.planPaid), cents(r.copay), cents(r.ded), cents(r.coins), cents(0), cents(r.owe)].join(' | '));
-    eobText.push([c.totals, '', sum('billed'), sum('discount'), sum('planPaid'), sum('copay'), sum('ded'), sum('coins'), cents(0), sum('owe')].join(' | '));
-    eobText.push('');
+    eobText.push(`${'Patient:'.padEnd(28)}${'Claim Number:'.padEnd(20)}Provider Name:`);
+    eobText.push(`${mine[0].patient.padEnd(28)}${String(40000000117 + n * 53).padEnd(20)}${mine[0].provider}`, '');
+    eobText.push(eobTable(c, mine), '', '');
   }
-  eobText.pop();
+  eobText.length -= 2;
 
   const csv = [HEADER.join(',')];
   for (const r of rows) {
@@ -232,13 +253,17 @@ function example(config, c, small) {
     csv.push([it.person, it.date, it.category, it.allowed.toFixed(2), 'in', it.count === 0 ? '0' : '', '', it.group].join(','));
   }
 
-  const [visit, lab, xray, shot] = rows;
+  const col = c.columns;
+  const [visit, lab, xray, shot, proc] = rows;
   const why = [];
   why.push(visit.copay > 0 ? `- The visit was charged a ${usd(visit.copay)} copay, so it is \`office\`.` : '- The first row is a visit to a doctor, so it is `office`.');
   why.push(`- The lab on the same day was paid in full (the plan paid all ${cents(lab.item.allowed)} of it) and is not preventive care, so it is \`office\` with \`count\` 0. That is a guess, so it is listed.`);
-  why.push(xray.ded > 0 || xray.coins > 0 ? `- The X-ray went to the deductible or coinsurance (${cents(xray.owe)} owed), so it is \`ded_coins\`.` : '- The X-ray was billed on its own by a hospital, so it is `ded_coins`.');
+  why.push(xray.ded > 0 || xray.coins > 0 ? `- The X-ray went to the deductible or coinsurance (${cents(xray.owe)} owed), so it is \`ded_coins\`.` : '- The X-ray was billed on its own, so it is `ded_coins`.');
   why.push(`- The ${prev.toLowerCase()} was paid in full and is preventive care, so it is \`preventive\`.`);
-  why.push(`- In every row, \`allowed\` is "${col.planPaid}" plus "${col.copay}" plus "${col.deductible}" plus "${col.coinsurance}". For the visit that is ${cents(visit.planPaid)} + ${cents(visit.copay)} + ${cents(visit.ded)} + ${cents(visit.coins)} = ${cents(visit.item.allowed)}.`);
+  why.push('- Both hospital rows went to the deductible or coinsurance, so both are `ded_coins`. Each is a row of its own, with an empty `count`.');
+  why.push(
+    `- In every row, \`allowed\` is "${col.planPaid}" plus "${col.copay}" plus "${col.deductible}" plus "${col.coinsurance}". It is never "${col.billed}". For the first hospital row that is ${cents(proc.planPaid)} + ${cents(proc.copay)} + ${cents(proc.ded)} + ${cents(proc.coins)} = ${cents(proc.item.allowed)}.`
+  );
 
   return {
     plan,
@@ -353,7 +378,7 @@ function tablePrompt(config) {
   );
 
   p.push('## An example');
-  p.push(`Three invented EOBs, shown in simplified form. The household is on this plan: ${ex.plan.name}.`);
+  p.push(`Four invented EOBs, each shown from the patient's name down to its table. The household is on this plan: ${ex.plan.name}.`);
   p.push(fence(ex.eobText));
   p.push('The table for them:');
   p.push(fence(ex.csv));
@@ -514,4 +539,4 @@ function agentPrompt(config, kind) {
   throw new Error(`no prompt of kind "${kind}"`);
 }
 
-module.exports = { agentPrompt, planFacts, ruleText, example, claimsWording, KINDS, HEADER };
+module.exports = { agentPrompt, planFacts, ruleText, example, eobTable, claimsWording, KINDS, HEADER };

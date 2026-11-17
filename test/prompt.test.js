@@ -25,12 +25,13 @@ for (const [kind, after] of [['frontier', 'The table for them:'], ['small', 'Rep
     const text = agentPrompt(config, kind);
     const { items, errors } = parseTable(csvAfter(text, after));
     assert.deepStrictEqual(errors, []);
-    assert.strictEqual(items.length, 4);
+    assert.strictEqual(items.length, 6);
     const ex = example(config, claimsWording(config), kind === 'small');
     const owed = replay(items, ex.plan, { family: true }).total;
     const printed = ex.rows.reduce((s, r) => s + r.owe, 0);
     assert.ok(Math.abs(owed - printed) < 0.005, `replay ${owed} vs example EOBs ${printed}`);
-    for (const r of ex.rows) assert.ok(text.includes(`$${r.item.allowed.toFixed(2)}`), 'each allowed amount is shown in the example');
+    for (const r of ex.rows) assert.ok(text.includes(`,${r.item.allowed.toFixed(2)},`), 'each allowed amount is in the example table');
+    assert.ok(ex.rows.some((r) => r.planPaid > 0 && r.ded > 0 && r.coins > 0), 'one example row is split between the plan, the deductible and coinsurance');
   });
 }
 
