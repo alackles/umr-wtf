@@ -4,7 +4,7 @@
 
 const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
-const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
+const { build, buildFromTable, tableThrough, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
 const { evaluate, tradeTable, sensitivity, sensitivityLines, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, addItems, COLUMNS } = require('../importer.js');
 const { agentPrompt, claimsWording, example: promptExample } = require('../prompt.js');
@@ -45,7 +45,7 @@ function load() {
   }
 }
 function fresh() {
-  return { v: STORE_VERSION, mode: 'A', answers: defaultAnswers(config, todayIso()), table: { items: [], groupsOff: [] }, importText: '', importErrors: [], importNote: '', process: 'self', promptKind: 'frontier' };
+  return { v: STORE_VERSION, mode: 'A', answers: defaultAnswers(config, todayIso()), table: { items: [], groupsOff: [], through: null }, importText: '', importErrors: [], importNote: '', process: 'self', promptKind: 'frontier' };
 }
 
 function changed(structural) {
@@ -780,6 +780,7 @@ function importSection(n) {
       } else {
         t.items = res.items;
         t.groupsOff = [];
+        t.through = null;
         ui.openGroups.clear();
         S.importNote = `Read ${rows(res.items.length)}.`;
       }
@@ -873,6 +874,7 @@ function importSection(n) {
       ? h(
           'div',
           { class: 'table-host' },
+          throughField(t),
           h('p', { class: 'intro' }, 'Switch a group off to see the year without it.'),
           itemsTable({
             items: t.items,
@@ -886,6 +888,29 @@ function importSection(n) {
           })
         )
       : null
+  );
+}
+
+// How far into the year the table runs, which sets how much it is scaled up.
+function throughField(t) {
+  const th = tableThrough(config, t);
+  const hint =
+    th.factor === 1
+      ? 'The table covers the whole year, so nothing is scaled up.'
+      : `Care after this date is not in the table yet, so the tool assumes the rest of the year goes on at the same rate: everything except ER visits is multiplied by ${th.factor.toFixed(2)}. If your EOBs run later than the last line in the table, pick that date instead.`;
+  return field(
+    'The table covers care through',
+    h('input', {
+      type: 'date',
+      id: 'q-through',
+      value: th.iso || '',
+      min: th.latestIso || null,
+      onchange: (e) => {
+        t.through = e.target.value || null;
+        changed(true);
+      },
+    }),
+    hint
   );
 }
 

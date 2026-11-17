@@ -490,9 +490,62 @@ function finishAssumptions(config, facts, A) {
   if (config.seriousEvent) A('bad-year', `a catastrophic year means ${config.seriousEvent.label}`, null);
 }
 
+// ---- Path B: a table of what happened, scaled to a full year ------------------------------
+const NOT_SCALED = new Set(['er_facility', 'er_physician']); // carried over as they happened
+
+function endOfMonth(year, month) {
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const len = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return `${year}-${String(month).padStart(2, '0')}-${len[month - 1]}`;
+}
+
+// Months from January 1 to a line: to the end of its day, or to the middle of its month.
+function position(it) {
+  const byDate = it.date ? monthsElapsed(it.date) : null;
+  if (byDate != null) return byDate;
+  const month = Number(it.month);
+  return month >= 1 && month < 13 ? Math.floor(month) - 0.5 : 0.5;
+}
+
+// How far into the year the table's care runs. By default that is its latest line: the day,
+// when the line has a date, or the end of its month. `table.through` (a date) can push it
+// later, never earlier, since care after it is plainly in the table.
+function tableThrough(config, table) {
+  const year = config.planYear - 1;
+  let latest = 0;
+  let latestIso = null;
+  for (const it of (table && table.items) || []) {
+    const byDate = it.date ? monthsElapsed(it.date) : null;
+    const month = Math.floor(Number(it.month));
+    const at = byDate != null ? byDate : month >= 1 && month <= 12 ? month : 0;
+    if (at > latest) {
+      latest = at;
+      latestIso = byDate != null ? it.date : endOfMonth(year, month);
+    }
+  }
+  const set = table && table.through ? monthsElapsed(table.through) : null;
+  const chosen = set != null && set > latest;
+  const months = Math.min(12, Math.max(0.5, (chosen ? set : latest) || 12));
+  return { months, factor: 12 / months, iso: chosen ? table.through : latestIso, chosen, latestIso };
+}
+
+// One line of the table, stretched to its place in a full year at the same rate of care.
+function scaleToYear(it, factor) {
+  if (factor === 1 || NOT_SCALED.has(it.category)) return it;
+  const out = Object.assign({}, it, {
+    month: Math.min(12.99, 1 + position(it) * factor),
+    allowed: it.allowed * factor,
+    count: (it.count == null ? 1 : it.count) * factor,
+  });
+  delete out.date;
+  if (it.billed != null) out.billed = it.billed * factor;
+  return out;
+}
+
 // Path B: an imported (or hand-edited) table of line items. The people list supplies roles
-// for the premium tier; the table supplies the care.
-//   table: { items: [...], groupsOff: [labels] }
+// for the premium tier; the table supplies the care, as it happened this year, and is scaled
+// to twelve months the way the questionnaire's numbers are.
+//   table: { items: [...], groupsOff: [labels], through: 'YYYY-MM-DD' | null }
 function buildFromTable(config, answers, table) {
   const problems = [];
   const notes = [];
@@ -519,22 +572,32 @@ function buildFromTable(config, answers, table) {
   if (unknown.size) {
     problems.push({ code: 'table-people', blocking: true, anchor: 'q-people', text: `The table has care for ${[...unknown].join(', ')}, who ${unknown.size === 1 ? 'is' : 'are'} not in the list of people. Names have to match.` });
   }
+  const through = tableThrough(config, table);
   const items = all
-    .filter((it) => !off.has(it.group) && (it.month || 1) <= lastMonth)
+    .filter((it) => !off.has(it.group))
     .filter((it) => {
       const p = byName.get(String(it.person).trim().toLowerCase());
       return !p || p.nextYear;
     })
     .map((it) => {
       const p = byName.get(String(it.person).trim().toLowerCase());
-      return Object.assign({}, it, { person: p ? p.id : it.person });
-    });
+      return scaleToYear(Object.assign({}, it, { person: p ? p.id : it.person }), through.factor);
+    })
+    .filter((it) => Math.floor(it.month || 1) <= lastMonth);
+  if (all.length && through.months < 3) {
+    notes.push({ code: 'early-year', text: 'The table covers only the start of the year, so scaling it to twelve months is rough.' });
+  }
 
   const planned = plannedEvents(config, answers, nextYear, lastMonth);
   items.push(...planned.map((p) => p.item));
 
   const facts = moneyFacts(config, answers, nextYear, family, lastMonth, notes);
-  A('table', 'the table is the whole coming year, as given', 'import-box');
+  if (through.factor === 1) A('table', 'the table covers the whole year', 'q-through');
+  else {
+    const [, , mm, dd] = /^(\d{4})-(\d{2})-(\d{2})$/.exec(through.iso);
+    A('table', `the table covers care through ${MONTHS[Number(mm) - 1]} ${Number(dd)}, and the rest of the year goes on at the same rate`, 'q-through');
+    if (items.some((it) => NOT_SCALED.has(it.category))) A('table-er', 'ER visits are counted as they happened, not scaled up', null);
+  }
   assumePlanned(config, planned, A);
   finishAssumptions(config, facts, A);
 
@@ -544,6 +607,7 @@ function buildFromTable(config, answers, table) {
     family,
     items,
     allItems: all,
+    through,
     people: nextYear.map((p) => ({ id: p.id, name: p.name })),
     lowerBound: [],
     anyRx: items.some((it) => /^rx_/.test(it.category)),
@@ -555,4 +619,4 @@ function buildFromTable(config, answers, table) {
   });
 }
 
-module.exports = { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts, typicalAllowed };
+module.exports = { build, buildFromTable, tableThrough, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts, typicalAllowed };
