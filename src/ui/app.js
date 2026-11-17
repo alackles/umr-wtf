@@ -1303,7 +1303,7 @@ function footer() {
       'div',
       { class: 'foot' },
       notes,
-      h('p', { class: 'footnote' }, (config.hints && config.hints.disclaimer) || 'Estimates only. The plan documents govern.'),
+      h('p', { class: 'footnote' }, (config.hints && config.hints.disclaimer) || 'Estimates only.'),
       h(
         'div',
         { class: 'row-actions no-print' },
@@ -1360,7 +1360,6 @@ function start(rawConfig) {
   resultsEl = h('div', { class: 'results', 'aria-live': 'polite' });
   app.appendChild(h('main', { class: 'layout' }, formEl, h('aside', { class: 'results-col', id: 'results' }, resultsEl)));
   app.appendChild(h('a', { class: 'to-results', href: '#results', onclick: (e) => { e.preventDefault(); document.getElementById('results').scrollIntoView({ behavior: 'smooth' }); } }, 'See the chart'));
-  app.appendChild(h('footer', { class: 'page-foot' }, `${config.planYear} plan year. ${config.source || ''} Built ${window.__BUILD__ || ''}.`));
   renderForm();
   renderResults();
 }
