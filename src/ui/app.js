@@ -720,10 +720,23 @@ function promptBlock(key, text, label) {
 
 function agentPanel() {
   const kind = S.promptKind === 'small' ? 'small' : 'frontier';
+  const same = ' The prompt carries the plan details from this page, so every agent works from the same numbers.';
+  const code = (text) => h('code', null, text);
   const how =
     kind === 'small'
-      ? 'Small models usually cannot open PDFs, so turn each EOB into text first and paste a few at a time under the prompt. Each reply is a piece of the table: add each piece in the next step.'
-      : 'Start a new chat, paste the prompt, and attach your EOBs. If they will not all fit in one message, send them in batches; the prompt tells the agent to expect that. It will ask you a few questions and then give you a table to bring back here.';
+      ? [
+          h('p', { class: 'hint block' }, 'Small models usually can\'t open PDFs, so turn each EOB into text first. ', code('pdftotext'), ', part of Poppler, is free and keeps the table\'s columns in line: ', code('pdftotext -layout eob.pdf')),
+          h(
+            'ul',
+            { class: 'hint block install' },
+            h('li', null, 'Mac: ', code('brew install poppler')),
+            h('li', null, 'Linux: it is often already there. If not, ', code('sudo apt install poppler-utils'), ' on Debian or Ubuntu, or ', code('sudo dnf install poppler-utils'), ' on Fedora.'),
+            h('li', null, 'If you\'re on Windows and doing this, you know more about Windows than I do, so do whatever works for you.')
+          ),
+          h('p', { class: 'hint block' }, 'You can also use online converters if you feel like uploading your EOBs to a random website.'),
+          h('p', { class: 'hint block' }, 'Then paste a few EOBs at a time under the prompt. Each reply is a piece of the table: add each piece in the next step.', same),
+        ]
+      : h('p', { class: 'hint block' }, 'Start a new chat, paste the prompt, and attach your EOBs. If they will not all fit in one message, send them in batches; the prompt tells the agent to expect that. It will ask you a few questions and then give you a table to bring back here.', same);
   return [
     h(
       'div',
@@ -741,7 +754,7 @@ function agentPanel() {
       },
       { id: 'prompt-kind', aria: 'Which kind of agent' }
     ),
-    h('p', { class: 'hint block' }, how, ' The prompt carries the plan details from this page, so every agent works from the same numbers.'),
+    how,
     promptBlock('table', agentPrompt(config, kind), 'Read and copy the prompt'),
     kind === 'frontier'
       ? [
