@@ -148,6 +148,15 @@ function parseTable(text) {
   return errors.length ? { items: [], errors } : { items, errors: [] };
 }
 
+// A later batch joins the table. `repeats` counts added rows that match a row already there;
+// when every added row does, it is almost always the same paste twice, and the page refuses it.
+function addItems(existing, added) {
+  const key = (it) => JSON.stringify([it.person, it.date || it.month, it.category, it.allowed, it.network || 'in', it.count == null ? 1 : it.count, it.billed == null ? null : it.billed, it.group || '']);
+  const have = new Set(existing.map(key));
+  const repeats = added.filter((it) => have.has(key(it))).length;
+  return { items: existing.concat(added), repeats };
+}
+
 function csvCell(v) {
   const s = v == null ? '' : String(v);
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -171,4 +180,4 @@ function toCsv(items) {
   return lines.join('\n') + '\n';
 }
 
-module.exports = { parseTable, parseCsv, toCsv, COLUMNS };
+module.exports = { parseTable, parseCsv, toCsv, addItems, COLUMNS };

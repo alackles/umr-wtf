@@ -140,6 +140,25 @@
   "fsa": { "limit": 3200, "carryover": 640 },
   "hsa": { "single": 4300, "family": 8600, "catchUp55": 1000, "employerContribution": 0 },
 
+  "claims": {
+    "where": "Download your EOBs as PDF files from the plan administrator's member site, one for each claim.",
+    "table": "Services you received",
+    "totals": "Totals",
+    "columns": {
+      "billed": "Amount billed",
+      "discount": "Discount",
+      "planPaid": "Plan paid",
+      "copay": "Copay",
+      "deductible": "Deductible",
+      "coinsurance": "Coinsurance",
+      "notCovered": "Not covered",
+      "owe": "You may owe"
+    },
+    "accumulators": "Each EOB also shows how much of each deductible and out-of-pocket limit had been used when it was issued.",
+    "labels": { "er": ["EMERGENCY"], "preventive": ["IMMUNIZATION"] },
+    "thisYear": "Fern and Moss had the same rules this year as they will next year."
+  },
+
   "typicalAllowed": { "office": 180, "therapy": 110, "urgent": 230, "er_facility": 1700, "er_physician": 320 },
   "seriousEvent": {
     "label": "an ER visit and a hospital stay for one person",

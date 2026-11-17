@@ -105,7 +105,6 @@ function build(config, answers) {
   const working = [];
   const items = [];
   const typical = typicalAllowed(config, answers);
-  const planned = []; // things the person told us are coming next year, for the "assuming" line
 
   const people = answers.people || [];
   const current = answers.currentPlan ? getPlan(config, answers.currentPlan) : null;
@@ -363,22 +362,9 @@ function build(config, answers) {
   }
 
   // ---- planned events -------------------------------------------------------------------
-  const ev = answers.events || {};
   const nextIds = new Set(nextYear.map((p) => p.id));
-  const nameOf = (id) => (people.find((p) => p.id === id) || {}).name;
-  const pick = (id) => (nextIds.has(id) ? id : nextYear.length ? nextYear[0].id : null);
-  const one = (key, monthDefault) => {
-    const e = ev[key];
-    if (!e || !e.on) return;
-    const who = pick(e.person);
-    if (!who) return;
-    const allowed = num(e.allowed) != null ? num(e.allowed) : config.events[key].allowed;
-    const month = Math.min(lastMonth, Math.max(1, num(e.month) || monthDefault));
-    items.push({ person: who, network: 'in', category: 'ded_coins', month, allowed, group: `${nameOf(who)}: ${config.events[key].label}`, planned: true });
-    planned.push({ key, person: who, allowed, usedDefault: num(e.allowed) == null });
-  };
-  one('birth', 6);
-  one('surgery', 6);
+  const planned = plannedEvents(config, answers, nextYear, lastMonth);
+  items.push(...planned.map((p) => p.item));
 
   // ---- money facts ---------------------------------------------------------------------
   const facts = moneyFacts(config, answers, nextYear, family, lastMonth, notes);
@@ -407,11 +393,7 @@ function build(config, answers) {
   if (inPlay.has('urgent care')) typ.push(`${money(typical.urgent)} for urgent care`);
   if (inPlay.has('ER visit') || inPlay.has('ER visits')) typ.push(`${money(typical.er_facility + typical.er_physician)} for an ER visit`);
   if (typ.length) A('typical', `full prices of ${typ.join(', ')}`, 'adv-typical');
-  for (const p of planned) {
-    if (!p.usedDefault) continue;
-    const label = config.events[p.key].label;
-    A(`event-${p.key}-${p.person}`, p.key === 'recurring' ? `${label} at ${money(p.allowed)} a month` : `${label} at ${money(p.allowed)}`, p.anchor || `ev-${p.key}`);
-  }
+  assumePlanned(config, planned, A);
 
   finishAssumptions(config, facts, A);
 
@@ -430,6 +412,33 @@ function build(config, answers) {
     assumptions,
     working,
   });
+}
+
+// A birth or a surgery the person says is coming next year, as line items. Shared by both paths.
+function plannedEvents(config, answers, nextYear, lastMonth) {
+  const ev = answers.events || {};
+  const out = [];
+  for (const key of ['birth', 'surgery']) {
+    const e = ev[key];
+    if (!e || !e.on || !nextYear.length) continue;
+    const who = nextYear.find((p) => p.id === e.person) || nextYear[0];
+    const allowed = num(e.allowed) != null ? num(e.allowed) : config.events[key].allowed;
+    const month = Math.min(lastMonth, Math.max(1, num(e.month) || 6));
+    out.push({
+      key,
+      person: who.id,
+      allowed,
+      usedDefault: num(e.allowed) == null,
+      item: { person: who.id, network: 'in', category: 'ded_coins', month, allowed, group: `${who.name}: ${config.events[key].label}`, planned: true },
+    });
+  }
+  return out;
+}
+
+function assumePlanned(config, planned, A) {
+  for (const p of planned) {
+    if (p.usedDefault) A(`event-${p.key}-${p.person}`, `${config.events[p.key].label} at ${money(p.allowed)}`, `ev-${p.key}`);
+  }
 }
 
 // Tax, premium modifiers and account eligibility: shared by both paths.
@@ -521,8 +530,12 @@ function buildFromTable(config, answers, table) {
       return Object.assign({}, it, { person: p ? p.id : it.person });
     });
 
+  const planned = plannedEvents(config, answers, nextYear, lastMonth);
+  items.push(...planned.map((p) => p.item));
+
   const facts = moneyFacts(config, answers, nextYear, family, lastMonth, notes);
   A('table', 'the table is the whole coming year, as given', 'import-box');
+  assumePlanned(config, planned, A);
   finishAssumptions(config, facts, A);
 
   return Object.assign(facts.public, {

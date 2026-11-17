@@ -6,7 +6,8 @@ const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
 const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
 const { evaluate, tradeTable, sensitivity, sensitivityLines, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
-const { parseTable, toCsv, COLUMNS } = require('../importer.js');
+const { parseTable, toCsv, addItems, COLUMNS } = require('../importer.js');
+const { agentPrompt, claimsWording } = require('../prompt.js');
 const { CATEGORIES } = require('../plans.js');
 const { stackedBars, hideTip } = require('./charts.js');
 const { itemsTable } = require('./table.js');
@@ -14,7 +15,7 @@ const { itemsTable } = require('./table.js');
 const STORE_VERSION = 1;
 let config;
 let S; // { v, mode: 'A' | 'B', answers, table: { items, groupsOff }, importText, importErrors }
-const ui = { openGroups: new Set(), advOpen: false, uid: 1, scenario: 'expected' };
+const ui = { openGroups: new Set(), advOpen: false, promptOpen: false, uid: 1, scenario: 'expected' };
 let formEl;
 let resultsEl;
 
@@ -44,7 +45,7 @@ function load() {
   }
 }
 function fresh() {
-  return { v: STORE_VERSION, mode: 'A', answers: defaultAnswers(config, todayIso()), table: { items: [], groupsOff: [] }, importText: '', importErrors: [] };
+  return { v: STORE_VERSION, mode: 'A', answers: defaultAnswers(config, todayIso()), table: { items: [], groupsOff: [] }, importText: '', importErrors: [], importNote: '', promptKind: 'frontier' };
 }
 
 function changed(structural) {
@@ -199,14 +200,19 @@ function renderForm() {
       )
     );
   }
-  formEl.appendChild(peopleSection(n++, a, current));
   if (S.mode === 'A') {
+    formEl.appendChild(peopleSection(n++, a, current));
     formEl.appendChild(thisYearSection(n++, a, current, onPlan));
     formEl.appendChild(usageSection(n++, a, current));
     formEl.appendChild(gatesSection(n++, a, current, onPlan, next));
     formEl.appendChild(eventsSection(n++, a, next));
   } else {
+    formEl.appendChild(getEobsSection(n++));
+    formEl.appendChild(promptSection(n++));
     formEl.appendChild(importSection(n++));
+    formEl.appendChild(checkSection(n++));
+    formEl.appendChild(peopleSection(n++, a, current));
+    formEl.appendChild(eventsSection(n++, a, next));
   }
   const accounts = accountsSection(n, a, next);
   if (accounts) {
@@ -627,6 +633,77 @@ function eventsSection(n, a, next) {
   return section(n, 'Anything coming up next year', 'Tap any that apply. None is a fine answer.', chips, panels);
 }
 
+// ---- the claims tab: get the EOBs, hand them to an agent, bring the table back, check it ------
+function getEobsSection(n) {
+  return section(n, 'Get your EOBs', claimsWording(config).where, h('p', { class: 'hint block' }, 'A script that downloads them all in one go is planned and not built yet.'));
+}
+
+const PROMPT_KINDS = [
+  { value: 'frontier', label: 'Claude, ChatGPT, Gemini or similar', sub: 'Reads the EOBs, builds the table, checks it, and talks the plans through with you.' },
+  { value: 'small', label: 'A small model on my own computer', sub: 'Copies EOB rows into the table and nothing more. Results may vary; this one is mostly for the curious.' },
+];
+
+function promptSection(n) {
+  const kind = S.promptKind === 'small' ? 'small' : 'frontier';
+  const text = agentPrompt(config, kind);
+  const box = h('textarea', { id: 'prompt-text', class: 'prompt-text', rows: '14', readonly: true, spellcheck: 'false', 'aria-label': 'The prompt' });
+  box.value = text;
+  const details = h('details', { class: 'help', open: ui.promptOpen }, h('summary', null, 'Read the prompt'), box);
+  details.addEventListener('toggle', () => {
+    ui.promptOpen = details.open;
+  });
+  const status = h('span', { class: 'hint', role: 'status' });
+  const done = (ok) => {
+    status.textContent = ok ? 'Copied.' : 'Could not copy from here. The prompt is selected below: press Ctrl+C, or Cmd+C on a Mac.';
+  };
+  const byHand = () => {
+    details.open = true;
+    box.focus();
+    box.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (e) {
+      ok = false;
+    }
+    done(ok);
+  };
+  const copy = h(
+    'button',
+    {
+      type: 'button',
+      class: 'btn primary',
+      'data-focus': 'copy-prompt',
+      onclick: () => {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(() => done(true), byHand);
+        else byHand();
+      },
+    },
+    'Copy the prompt'
+  );
+  const how =
+    kind === 'small'
+      ? 'Small models usually cannot open PDFs, so turn each EOB into text first and paste a few at a time under the prompt. Each reply is a piece of the table: add each piece in the next step.'
+      : 'Start a new chat, paste the prompt, and attach your EOBs. If they will not all fit in one message, send them in batches; the prompt tells the agent to expect that. It will ask you a few questions and then give you a table to bring back here.';
+  return section(
+    n,
+    'Hand them to an AI agent',
+    'Optional. If you would rather not, skip this step and type or paste a table yourself in the next one.',
+    choice(
+      PROMPT_KINDS,
+      kind,
+      (v) => {
+        S.promptKind = v;
+        changed(true);
+      },
+      { id: 'prompt-kind', aria: 'Which kind of agent' }
+    ),
+    h('p', { class: 'hint block' }, how, ' The prompt carries the plan details from this page, so every agent works from the same numbers.'),
+    h('div', { class: 'row-actions' }, copy, status),
+    details
+  );
+}
+
 function importSection(n) {
   const t = S.table;
   const box = h('textarea', {
@@ -640,13 +717,29 @@ function importSection(n) {
     },
   });
   box.value = S.importText || '';
-  const read = () => {
+  const rows = (k) => `${k} ${k === 1 ? 'row' : 'rows'}`;
+  // add: join the rows in the box to the table. Otherwise the box replaces the table.
+  const take = (add) => {
     const res = parseTable(S.importText);
     S.importErrors = res.errors;
+    S.importNote = '';
+    S.importRepeat = false;
     if (!res.errors.length) {
-      t.items = res.items;
-      t.groupsOff = [];
-      ui.openGroups.clear();
+      if (add && t.items.length) {
+        const joined = addItems(t.items, res.items);
+        if (joined.repeats === res.items.length) {
+          S.importRepeat = true;
+        } else {
+          t.items = joined.items;
+          S.importText = '';
+          S.importNote = `Added ${rows(res.items.length)}. The table now has ${t.items.length}.${joined.repeats ? ` ${rows(joined.repeats)} matched rows that were already there: check they are not repeats.` : ''}`;
+        }
+      } else {
+        t.items = res.items;
+        t.groupsOff = [];
+        ui.openGroups.clear();
+        S.importNote = `Read ${rows(res.items.length)}.`;
+      }
       syncPeopleFromTable();
     }
     changed(true);
@@ -662,7 +755,11 @@ function importSection(n) {
       const reader = new FileReader();
       reader.onload = () => {
         S.importText = String(reader.result || '');
-        read();
+        if (!t.items.length) return take(false);
+        S.importErrors = [];
+        S.importRepeat = false;
+        S.importNote = `${f.name} is in the box. Add it to the table, or replace the table with it.`;
+        changed(true);
       };
       reader.onerror = () => {
         S.importErrors = [`Could not read ${f.name}.`];
@@ -677,14 +774,18 @@ function importSection(n) {
   const hasA = S.answers.people.some((p) => p.usage);
   return section(
     n,
-    'Your line items',
-    null,
-    h('p', { class: 'hint block' }, 'The EOB downloader and the agent prompt are not built yet. Until they are, any table in the format below works, including one you type.'),
+    'Bring the table back',
+    'Paste what the agent gave you, or load it as a file. Any table in the format below works, including one you type.',
     box,
     h(
       'div',
       { class: 'row-actions' },
-      h('button', { type: 'button', class: 'btn primary', 'data-focus': 'read-table', onclick: read }, 'Read the table'),
+      t.items.length
+        ? [
+            h('button', { type: 'button', class: 'btn primary', 'data-focus': 'add-table', onclick: () => take(true) }, 'Add to the table'),
+            h('button', { type: 'button', class: 'btn', 'data-focus': 'read-table', onclick: () => take(false) }, 'Replace the table'),
+          ]
+        : h('button', { type: 'button', class: 'btn primary', 'data-focus': 'read-table', onclick: () => take(false) }, 'Read the table'),
       h('label', { class: 'btn' }, 'Load a file', file),
       hasA
         ? h(
@@ -696,7 +797,7 @@ function importSection(n) {
                 const hh = build(config, S.answers);
                 const nameOf = new Map(S.answers.people.map((p) => [p.id, p.name]));
                 S.importText = toCsv(hh.allItems.map((it) => Object.assign({}, it, { month: Math.round(it.month), person: nameOf.get(it.person) || it.person })));
-                read();
+                take(false);
               },
             },
             'Start from my questionnaire answers'
@@ -710,6 +811,7 @@ function importSection(n) {
               class: 'btn',
               onclick: () => {
                 S.importText = toCsv(t.items);
+                S.importNote = '';
                 changed(true);
                 const el = document.getElementById('import-box');
                 if (el) el.select();
@@ -719,6 +821,8 @@ function importSection(n) {
           )
         : null
     ),
+    S.importNote && !errors ? h('p', { class: 'hint block', role: 'status' }, S.importNote) : null,
+    S.importRepeat ? h('div', { class: 'problem', role: 'alert' }, h('span', null, h('b', null, 'Nothing was added. '), 'Every row in the box is already in the table. Was this batch pasted twice?')) : null,
     errors,
     h(
       'details',
@@ -738,7 +842,18 @@ function importSection(n) {
         h('li', null, h('code', null, 'group'), ' optional label, such as "ER visit in March" or "weekly therapy"')
       ),
       h('p', { class: 'muted' }, `Accepted columns: ${COLUMNS.join(', ')}. Anything else is reported, not ignored.`)
-    ),
+    )
+  );
+}
+
+function checkSection(n) {
+  const t = S.table;
+  return section(
+    n,
+    'Check it against your claims',
+    null,
+    h('p', null, h('b', null, 'If you are using an AI agent to do this, you are responsible for checking that its output is the same as your actual claims.')),
+    h('p', { class: 'hint block' }, 'The prompt asks the agent to say, for each person, how many EOBs it read and what they say you owed. Start with those numbers.'),
     t.items.length
       ? h(
           'div',
@@ -755,7 +870,7 @@ function importSection(n) {
             },
           })
         )
-      : null
+      : h('p', { class: 'muted' }, 'No line items yet.')
   );
 }
 
