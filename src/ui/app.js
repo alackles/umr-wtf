@@ -4,7 +4,7 @@
 
 const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
-const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
+const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts, typicalAllowed } = require('../household.js');
 const { evaluate, sensitivity, sensitivitySentence, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, COLUMNS } = require('../importer.js');
 const { CATEGORIES } = require('../plans.js');
@@ -196,14 +196,6 @@ function renderForm() {
     formEl.appendChild(eventsSection(n++, a, next));
   } else {
     formEl.appendChild(importSection(n++));
-    formEl.appendChild(
-      section(
-        n++,
-        'One eligibility question',
-        null,
-        gate(a, 'hsa', 'Is anyone on Medicare, or does your spouse have their own FSA?', hsaPanel(a))
-      )
-    );
   }
   const accounts = accountsSection(n, a, next);
   if (accounts) {
@@ -355,7 +347,8 @@ function thisYearSection(n, a, current, onPlan) {
             field('Deductible met', numberBox(p, 'dedMet', { prefix: '$', placeholder: '0', aria: `${p.name} deductible met` }), `out of ${dollars(current.in.ded[0])}`),
             field('Out-of-pocket met', numberBox(p, 'oopMet', { prefix: '$', placeholder: '0', aria: `${p.name} out-of-pocket met` }), `out of ${dollars(current.in.oop[0])}`)
           ),
-          h('p', { class: 'working', id: `work-${p.id}` })
+          h('p', { class: 'working', id: `work-${p.id}` }),
+          h('div', { class: 'cap-slot', id: `cap-${p.id}` })
         )
       );
     }
@@ -424,7 +417,6 @@ function usageSection(n, a, current) {
         }
       }
       block.appendChild(h('div', { class: 'settle', id: `settle-${p.id}` }));
-      if (p.nextYear) block.appendChild(treatmentBlock(p, onPlan));
       return block;
     });
   return section(n, 'How much care', 'Checkups and other preventive care are free on every plan, so they do not count here.', blocks);
@@ -433,47 +425,6 @@ function usageSection(n, a, current) {
 function monthsSoFar(a) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(a.asOf || '');
   return m ? Math.max(1, Math.min(12, Number(m[2]) - 1 + Number(m[3]) / 30)) : 12;
-}
-
-// Recurring treatment that starts next year, inside the person's "how much care" block.
-function treatmentBlock(p, onPlan) {
-  if (!p.treatment) p.treatment = { on: false, startMonth: 1, months: 12, allowedPerMonth: null };
-  const tx = p.treatment;
-  const chip = h(
-    'button',
-    {
-      type: 'button',
-      class: 'chip' + (tx.on ? ' on' : ''),
-      'aria-pressed': tx.on ? 'true' : 'false',
-      'data-focus': `tx:${p.id}`,
-      onclick: () => {
-        tx.on = !tx.on;
-        changed(true);
-      },
-    },
-    h('span', { class: 'chip-label' }, 'Recurring treatment next year')
-  );
-  const out = h('div', { class: 'treatment' }, h('div', { class: 'choice' }, chip));
-  if (tx.on) {
-    out.appendChild(
-      h(
-        'div',
-        { class: 'panel', id: `tx-${p.id}` },
-        h(
-          'div',
-          { class: 'trio' },
-          field('Starting', monthSelect(tx.startMonth, (v) => {
-            tx.startMonth = v;
-            changed(false);
-          }, { aria: `${p.name} treatment start` })),
-          field('For how many months', numberBox(tx, 'months', { placeholder: '12', max: 12, aria: `${p.name} months of treatment` })),
-          field('Charges per month', numberBox(tx, 'allowedPerMonth', { prefix: '$', placeholder: String(config.events.recurring.allowedPerMonth), wide: true, aria: `${p.name} treatment charges per month` }), 'The bill before insurance. The grey number is a typical figure, used if you leave this blank.')
-        ),
-        onPlan ? h('p', { class: 'hint block' }, 'For treatment that is new next year. If it is already in this year\'s numbers, leave this off or it is counted twice.') : null
-      )
-    );
-  }
-  return out;
 }
 
 function gate(a, key, question, panel) {
@@ -491,8 +442,8 @@ function gate(a, key, question, panel) {
 
 function hsaPanel(a) {
   return [
-    check(a.hsa, 'selfMedicare', 'I am enrolled in Medicare (any part)', { structural: false }),
-    check(a.hsa, 'spouseFsa', 'My spouse has a general-purpose health FSA through their own job', { structural: false }),
+    check(a.hsa, 'selfMedicare', 'I am enrolled in Medicare (any part)'),
+    check(a.hsa, 'spouseFsa', 'My spouse has a general-purpose health FSA through their own job'),
     h('p', { class: 'hint block' }, 'Either one means you cannot put money in an HSA, so the high-deductible plan is shown without that tax benefit. A spouse or child on Medicare does not block you.'),
   ];
 }
@@ -527,42 +478,97 @@ function gatesSection(n, a, current, onPlan, next) {
   );
   rxPanel.push(h('p', { class: 'hint block' }, 'The cash price only matters for a plan that sends prescriptions to the deductible. A pharmacy receipt or a discount-card site will show it; the grey numbers are rough stand-ins.'));
 
-  const oonPanel = next.map((p) =>
-    h(
+  const oonShare = config.oonAllowedShare || 1;
+  const oonPanel = next.map((p) => {
+    if (p.oon.allowed === undefined) p.oon.allowed = null;
+    const charge = Number(p.oon.charge) || 0;
+    return h(
       'div',
       { class: 'person-block' },
       h('h3', null, p.name),
       h(
         'div',
-        { class: 'pair' },
+        { class: 'trio' },
         field('Visits a year', numberBox(p.oon, 'visits', { placeholder: '0', aria: `${p.name} out-of-network visits` })),
-        field('What the provider charges per visit', numberBox(p.oon, 'charge', { prefix: '$', placeholder: '0', aria: `${p.name} out-of-network charge` }))
+        field('Billed per visit', numberBox(p.oon, 'charge', { prefix: '$', placeholder: '0', structural: true, id: `oon-charge-${p.id}`, aria: `${p.name} out-of-network charge` })),
+        field('Plan allows per visit', numberBox(p.oon, 'allowed', { prefix: '$', placeholder: charge ? String(Math.round(charge * oonShare)) : '', id: `oon-allowed-${p.id}`, aria: `${p.name} out-of-network allowed amount` }))
       )
+    );
+  });
+  oonPanel.push(
+    h(
+      'p',
+      { class: 'hint block' },
+      `Out of network, the plan decides what a visit should cost (its "allowed amount") and pays its share of only that. The provider can bill you for the rest, and that part counts toward no deductible or cap. An EOB for one of these visits shows the allowed amount. Left blank, the tool guesses ${Math.round(oonShare * 100)}% of the bill.`
     )
   );
 
-  const capPanel = onPlan.length
-    ? onPlan
-        .map((p) =>
-          field(
-            `${p.name} hit the cap in`,
-            monthSelect(p.capMonth, (v) => {
-              p.capMonth = v;
-              changed(false);
-            }, { blank: 'did not, or not sure', aria: `${p.name} cap month` })
-          )
-        )
-        .concat([h('p', { class: 'hint block' }, 'After the cap, care is free and leaves no trace in the numbers. Knowing the month lets the tool project the rate before it forward.')])
-    : [h('p', { class: 'hint block' }, 'Nothing to ask: nobody was on a plan this year.')];
+  const typicalOffice = typicalAllowed(config, a).office;
+  const sinceSelect = (sp, p) =>
+    h(
+      'select',
+      {
+        'aria-label': `${p.name}: when ${sp.name || 'this specialist'} started`,
+        onchange: (e) => {
+          const v = e.target.value;
+          sp.since = v === 'year' || v === 'next' ? v : Number(v);
+          changed(false);
+        },
+      },
+      h('option', { value: 'year', selected: !sp.since || sp.since === 'year' }, 'all of this year'),
+      MONTHS.slice(1).map((m, i) => h('option', { value: i + 2, selected: sp.since === i + 2 }, `since ${m}`)),
+      h('option', { value: 'next', selected: sp.since === 'next' }, 'starting next year')
+    );
+  const specPanel = everyone.map((p) => {
+    if (!p.specialists) p.specialists = [];
+    const onPlanP = !!current && p.thisYear;
+    const rows = p.specialists.map((sp) =>
+      h(
+        'div',
+        { class: 'spec-row' },
+        h(
+          'div',
+          { class: 'pair' },
+          field('Kind of specialist', h('input', { type: 'text', class: 'name', value: sp.name || '', placeholder: 'e.g. neurology', 'aria-label': `${p.name}: kind of specialist`, onchange: (e) => {
+            sp.name = e.target.value.trim();
+            changed(false);
+          } })),
+          field('Visits a year', numberBox(sp, 'visits', { placeholder: '0', aria: `${p.name}: ${sp.name || 'specialist'} visits a year` })),
+          field('Billed per visit', numberBox(sp, 'cost', { prefix: '$', placeholder: String(typicalOffice), aria: `${p.name}: ${sp.name || 'specialist'} billed per visit` })),
+          onPlanP ? field('Seeing them', sinceSelect(sp, p)) : null
+        ),
+        h('button', { type: 'button', class: 'link', 'aria-label': `Remove ${sp.name || 'this specialist'} for ${p.name}`, onclick: () => {
+          p.specialists = p.specialists.filter((q) => q !== sp);
+          changed(true);
+        } }, 'remove')
+      )
+    );
+    return h(
+      'div',
+      { class: 'person-block' },
+      h('h3', null, p.name),
+      rows,
+      h('button', { type: 'button', class: 'btn', 'data-focus': `spec-add:${p.id}`, onclick: () => {
+        p.specialists.push({ id: 's' + Date.now().toString(36) + ui.uid++, name: '', visits: null, cost: null, since: 'year' });
+        changed(true);
+      } }, p.specialists.length ? '+ another specialist' : '+ add a specialist')
+    );
+  });
+  specPanel.push(
+    h(
+      'p',
+      { class: 'hint block' },
+      'Billed per visit is the bill before insurance; an old EOB shows it as the "allowed amount". On a plan with an office copay the visit itself costs the copay, and whatever a visit is billed beyond a typical office visit (scans, infusions, procedures) goes through the deductible. Leave these visits out of the counts under "How much care".'
+    )
+  );
 
   return section(
     n,
-    'Four quick questions',
-    'Each "yes" opens a few more boxes. Each "no" is taken at its word and listed under the chart.',
+    'Additional considerations',
+    'Common, not universal, and each one changes the numbers a lot. Each "yes" opens a few more boxes. Each "no" is taken at its word and listed under the chart.',
     gate(a, 'rx', 'Does anyone take regular prescriptions?', rxPanel),
-    gate(a, 'oon', 'Does anyone see a provider who doesn\'t take your insurance?', oonPanel),
-    gate(a, 'hsa', 'Is anyone on Medicare, or does your spouse have their own FSA?', hsaPanel(a)),
-    gate(a, 'cap', 'Did anyone hit their out-of-pocket cap this year?', capPanel)
+    gate(a, 'spec', 'Does anyone see a specialist regularly?', specPanel),
+    gate(a, 'oon', 'Does anyone see a provider who doesn\'t take your insurance?', oonPanel)
   );
 }
 
@@ -779,6 +785,8 @@ function accountsSection(n, a, next) {
   const hsaPlans = config.plans.filter((p) => p.account === 'hsa');
   if (!fsaPlans.length && !hsaPlans.length) return null;
   const hsaMax = config.hsa ? (next.length > 1 ? config.hsa.family : config.hsa.single) : 0;
+  const hsaBlocked = a.gates.hsa === true && (a.hsa.selfMedicare || a.hsa.spouseFsa);
+  const hsaLabel = `HSA contribution (${hsaPlans.map((p) => p.short).join(', ')})`;
   return section(
     n,
     'FSA/HSA contributions',
@@ -787,8 +795,10 @@ function accountsSection(n, a, next) {
       'div',
       { class: 'pair', id: 'q-accounts' },
       fsaPlans.length ? field(`FSA election (${fsaPlans.map((p) => p.short).join(', ')})`, numberBox(adv, 'fsa', { prefix: '$', placeholder: '0', max: config.fsa.limit, aria: 'FSA election' }), `Up to ${dollars(config.fsa.limit)} a year. What bills do not use can go to other eligible things, such as over-the-counter medicine; ${dollars(config.fsa.carryover)} can carry into next year.`) : null,
-      hsaPlans.length ? field(`HSA contribution (${hsaPlans.map((p) => p.short).join(', ')})`, numberBox(adv, 'hsa', { prefix: '$', placeholder: '0', max: hsaMax, aria: 'HSA contribution' }), `Up to ${dollars(hsaMax)} a year for your tier. The money stays yours.`) : null
-    )
+      hsaPlans.length && !hsaBlocked ? field(hsaLabel, numberBox(adv, 'hsa', { prefix: '$', placeholder: '0', max: hsaMax, aria: 'HSA contribution' }), `Up to ${dollars(hsaMax)} a year for your tier. The money stays yours.`) : null,
+      hsaPlans.length && hsaBlocked ? h('div', { class: 'field' }, h('span', { class: 'field-label' }, hsaLabel), h('span', { class: 'hint' }, 'Not open to you, from your answer below.')) : null
+    ),
+    hsaPlans.length ? gate(a, 'hsa', 'Is anyone on Medicare, or does your spouse have their own FSA?', hsaPanel(a)) : null
   );
 }
 
@@ -939,6 +949,25 @@ function jump(anchor) {
 function renderWorking(res) {
   for (const el of formEl.querySelectorAll('.working')) clear(el);
   for (const el of formEl.querySelectorAll('.settle')) clear(el);
+  // The cap-month box appears only for people at a cap. Left alone once drawn, so a
+  // keyboard user moving through the months keeps focus.
+  const capped = new Set(res.hh ? res.hh.working.filter((w) => w.censored).map((w) => w.person) : []);
+  for (const slot of formEl.querySelectorAll('.cap-slot')) {
+    const p = S.answers.people.find((q) => `cap-${q.id}` === slot.id);
+    if (!p || !capped.has(p.id)) clear(slot);
+    else if (!slot.firstChild) {
+      slot.appendChild(
+        field(
+          'Reached the cap in',
+          monthSelect(p.capMonth, (v) => {
+            p.capMonth = v;
+            changed(false);
+          }, { blank: 'not sure', aria: `${p.name} cap month` }),
+          'After the cap, care is free and leaves no trace in these numbers. The month lets the tool estimate the rest of the year.'
+        )
+      );
+    }
+  }
   if (!res.hh) return;
   for (const w of res.hh.working) {
     const el = document.getElementById(`work-${w.person}`);
@@ -1278,7 +1307,7 @@ function start(rawConfig) {
     )
   );
   app.appendChild(
-    h('p', { class: 'lede' }, `For ${config.audience || 'people'} choosing between ${config.plans.map((p) => p.name).join(', ').replace(/, ([^,]*)$/, ' and $1')} for ${config.planYear}. Everyone wants to pay as little as possible for as much protection as possible; people differ in where they sit on that trade. So this shows you your trade, and says which plans are never worth picking for your answers.`)
+    h('p', { class: 'lede' }, `For ${config.audience || 'people'} choosing between ${config.plans.map((p) => p.name).join(', ').replace(/, ([^,]*)$/, ' and $1')} for ${config.planYear}. Everyone wants to pay as little as possible for as much protection as possible; people differ in where they sit on that trade. So this shows you your trade, and flags any plan that is not the cheapest in any year it shows.`)
   );
   formEl = h('form', { class: 'form', onsubmit: (e) => e.preventDefault(), novalidate: true });
   resultsEl = h('div', { class: 'results', 'aria-live': 'polite' });

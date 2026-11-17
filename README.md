@@ -4,7 +4,7 @@ A medical plan chooser that shows the trade, not a verdict.
 
 Answer a short questionnaire (or import a table of real claim lines) and it replays your
 year under each plan's rules: premiums only, a typical year, a catastrophic year, and the
-worst case. It tells you which plans are never the cheapest for your answers and
+worst case. It flags any plan that is not the cheapest in any of those years, and says
 what the extra premium on the others buys.
 
 One self-contained HTML page. It makes no network requests, and carries a

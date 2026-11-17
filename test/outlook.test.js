@@ -40,6 +40,26 @@ test('answers scale to a full year from the as-of date', () => {
   near(charges, 400, 3);
 });
 
+test('specialist care already under way explains this year\'s dollars instead of being counted twice', () => {
+  // 12 visits a year billed 680 each: a 180 office visit (20 copay) plus 500 through the deductible.
+  // A full year of that on this plan: 400 deductible + 12 copays + 15% of the other 5600.
+  const sp = { id: 's1', name: 'neurology', visits: 12, cost: 680, since: 'year' };
+  const a = single({ usage: 'counts', counts: { office: 0, therapy: 0, urgent: 0, er: 0 }, dedMet: 400, oopMet: 400 + 240 + 0.15 * 5600, specialists: [sp] });
+  a.gates.spec = true;
+  const hh = build(config, a);
+  assert.deepStrictEqual(hh.problems, []);
+  const sum = (re, cat) => hh.items.filter((it) => re.test(it.group) && it.category === cat).reduce((s, it) => s + it.allowed, 0);
+  near(sum(/neurology/, 'office'), 12 * 180, 0.5);
+  near(sum(/neurology/, 'ded_coins'), 12 * 500, 0.5);
+  near(sum(/other care/, 'ded_coins'), 0, 1); // nothing left over to scale up and add again
+  // The same specialist starting next year leaves this year's reading alone and adds a full year.
+  const b = single({ usage: 'counts', counts: { office: 0, therapy: 0, urgent: 0, er: 0 }, specialists: [Object.assign({}, sp, { since: 'next' })] });
+  b.gates.spec = true;
+  const hb = build(config, b);
+  assert.deepStrictEqual(hb.problems, []);
+  near(hb.items.filter((it) => /neurology/.test(it.group)).reduce((s, it) => s + it.allowed, 0), 12 * 680, 0.5);
+});
+
 test('someone at the cap with no month given: other plans are marked "at least"', () => {
   const a = single({ usage: 'counts', counts: { office: 0, therapy: 0, urgent: 0, er: 0 }, dedMet: 400, oopMet: 1800 });
   const hh = build(config, a);
@@ -48,7 +68,6 @@ test('someone at the cap with no month given: other plans are marked "at least"'
   assert.strictEqual(byId(out, 'fern').atLeast, false); // capped there too: exact
   assert.strictEqual(byId(out, 'moss').atLeast, true);
   // Saying which month the cap was hit projects the rate forward and removes the hedge.
-  a.gates.cap = true;
   a.people[0].capMonth = 6;
   const hh2 = build(config, a);
   assert.deepStrictEqual(hh2.lowerBound, []);

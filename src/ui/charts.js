@@ -204,7 +204,7 @@ function stackedBars(out, ctx) {
           ctx.view === 'takehome' ? h('small', null, ` (${dollars(pay.gross)} before tax)`) : null,
           pay.election > 0 ? h('small', null, `, ${dollars(pay.grossElection)} of it to the ${pay.electionKind.toUpperCase()}`) : null
         ),
-        p.neverCheapest ? h('p', { class: 'tag-never' }, 'never the cheapest') : null
+        p.neverCheapest ? h('p', { class: 'tag-never' }, 'not cheapest in any year shown') : null
       )
     );
   });
@@ -222,7 +222,7 @@ function stackedBars(out, ctx) {
   const note = (p, cls, ...body) => notes.push(h('li', { class: cls }, h('b', null, p.short + ': '), body));
   for (const p of plans) {
     const acct = p.scenarios[sKey].parts.account;
-    if (p.neverCheapest) note(p, 'flag-never', 'never the cheapest over a year for your answers.' + (p.smallestPaycheck ? ' It does have the smallest paycheck deduction.' : ''));
+    if (p.neverCheapest) note(p, 'flag-never', 'another plan costs less in the typical year, the catastrophic year and the worst case.' + (p.smallestPaycheck ? ' It does have the smallest paycheck deduction.' : ''));
     if (priority === 'paycheck' && ctx.canAbsorb === false && p.smallestPaycheck && plans.length > 1) {
       note(
         p,

@@ -5,7 +5,7 @@
 // the household facts the money views need. The engine never learns which path made them.
 
 const { ruleFor, tierFor, getPlan, RX_TIERS } = require('./plans.js');
-const { backOut, monthsElapsed, TOL } = require('./estimator.js');
+const { backOut, splitUsage, monthsElapsed, TOL } = require('./estimator.js');
 
 // Usage presets, as visits in a full year. `other` is a rough yearly figure for labs,
 // imaging and the like, used only for people with no accumulators to read.
@@ -39,8 +39,8 @@ function newPerson(id, role, name) {
     other: null,
     capMonth: null,
     rx: {}, // { rx_generic: { fills, price }, ... }  fills per month
-    oon: { visits: null, charge: null }, // visits per year, charge per visit
-    treatment: { on: false, startMonth: 1, months: 12, allowedPerMonth: null }, // new next year
+    oon: { visits: null, charge: null, allowed: null }, // visits per year; billed and allowed per visit
+    specialists: [], // [{ id, name, visits (a year), cost (billed per visit), since: 'year' | 2..12 | 'next' }]
     dme: null, // medical equipment next year, total charges
     trust: null, // 'dollars' | 'counts' when the inputs disagree
   };
@@ -52,7 +52,7 @@ function defaultAnswers(config, todayIso) {
     currentPlan: undefined, // undefined: not answered yet. null: no plan this year.
     people: [newPerson('p1', 'self')],
     familyMet: { ded: null, oop: null },
-    gates: { rx: null, oon: null, hsa: null, cap: null },
+    gates: { rx: null, oon: null, spec: null, hsa: null },
     hsa: { selfMedicare: false, spouseFsa: false },
     events: {
       birth: { on: false, person: null, month: 6, allowed: null },
@@ -153,12 +153,14 @@ function build(config, answers) {
 
   const rxOn = answers.gates && answers.gates.rx === true;
   const oonOn = answers.gates && answers.gates.oon === true;
-  const capOn = answers.gates && answers.gates.cap === true;
+  const specOn = answers.gates && answers.gates.spec === true;
   const lowerBound = []; // people whose charges are only a lower bound
   const defaultPricesUsed = new Set();
   const presetsUsed = [];
   let anyRx = false;
   let anyOon = false;
+  let oonGuessed = false;
+  let specGuessed = false;
 
   const leaving = answers.events && answers.events.leaving && answers.events.leaving.on;
   const lastMonth = leaving ? Math.min(12, Math.max(1, num(answers.events.leaving.month) || 12)) : 12;
@@ -167,6 +169,18 @@ function build(config, answers) {
 
   for (const person of people) {
     const onPlan = !!current && person.thisYear;
+    // Specialists: each visit is an office visit at up to the typical price (a copay where the
+    // plan has one); whatever a visit is billed beyond that (scans, infusions, procedures) goes
+    // through the deductible and coinsurance.
+    const specs = specOn
+      ? (person.specialists || [])
+          .map((sp) => {
+            const cost = num(sp.cost) != null ? num(sp.cost) : typical.office;
+            if (num(sp.cost) == null && num(sp.visits) > 0) specGuessed = true;
+            return { name: String(sp.name || '').trim(), visits: num(sp.visits) || 0, visit: Math.min(cost, typical.office), extra: Math.max(0, cost - typical.office), since: sp.since };
+          })
+          .filter((sp) => sp.visits > 0)
+      : [];
     const preset = PRESETS[person.usage] || null;
     const counted = person.usage === 'counts';
     if (!preset && !counted) {
@@ -219,10 +233,20 @@ function build(config, answers) {
         { category: 'er_physician', count: ytd.er, allowedEach: typical.er_physician },
       ];
       for (const r of rx) usage.push({ category: r.tier, count: r.fills * elapsed, allowedEach: r.price });
+      // Specialist care already under way is part of this year's dollars: list it, so it
+      // explains them instead of being scaled up as other care and then added again.
+      const specUsage = [];
+      for (const sp of specs) {
+        const from = sp.since === 'next' ? null : Number(sp.since) >= 2 ? Number(sp.since) : 1;
+        const visits = from == null ? 0 : (sp.visits * Math.max(0, elapsed - (from - 1))) / 12;
+        specUsage.push({ category: 'office', count: visits, allowedEach: sp.visit });
+        if (sp.extra > 0) specUsage.push({ category: 'ded_coins', count: visits, allowedEach: sp.extra });
+      }
+      usage.push(...specUsage);
 
       const atOwnCap = oopMet >= current.in.oop[0] - TOL;
       const censored = atOwnCap || (familyThisYear && familyCapMet);
-      const capMonth = capOn ? num(person.capMonth) : null;
+      const capMonth = num(person.capMonth);
       const paidShare = censored ? (capMonth ? Math.min(1, capMonth / elapsed) : null) : 1;
 
       const est = backOut({
@@ -262,6 +286,12 @@ function build(config, answers) {
       erVisits = ytd.er * est.usageScale;
 
       recurring = Math.max(0, est.residual) * fCharges;
+      if (specUsage.length && !censored) {
+        const listed = splitUsage(current, usage).throughDed * est.usageScale;
+        if (listed > est.charges + 100) {
+          notes.push({ code: 'spec-large', person: person.id, text: `${person.name}: the care listed would have put about ${money(listed)} through the deductible so far, more than the ${money(est.charges)} these numbers show. Next year uses the specialist figures as given.` });
+        }
+      }
       if (censored && !capMonth) lowerBound.push(person.id);
 
       working.push({
@@ -308,15 +338,10 @@ function build(config, answers) {
       const base = Object.assign({ category: 'ded_coins', group: label('labs, imaging, hospital and other care') }, who);
       for (const m of allMonths) items.push(Object.assign({}, base, { month: m, allowed: recurring / 12 }));
     }
-    const tx = person.treatment;
-    if (tx && tx.on) {
-      const per = num(tx.allowedPerMonth) != null ? num(tx.allowedPerMonth) : config.events.recurring.allowedPerMonth;
-      const start = Math.max(1, num(tx.startMonth) || 1);
-      const count = Math.max(1, num(tx.months) || 12);
-      for (let m = start; m < start + count && m <= lastMonth; m++) {
-        items.push(Object.assign({ category: 'ded_coins', group: label(config.events.recurring.label), month: m, allowed: per, planned: true }, who));
-      }
-      planned.push({ key: 'recurring', person: person.id, allowed: per, usedDefault: num(tx.allowedPerMonth) == null, anchor: `tx-${person.id}` });
+    for (const sp of specs) {
+      const group = label(sp.name ? `${sp.name} visits` : 'specialist visits');
+      items.push(...monthly(Object.assign({ category: 'office', group }, who), sp.visits, sp.visit, allMonths));
+      if (sp.extra > 0) items.push(...monthly(Object.assign({ category: 'ded_coins', group }, who), sp.visits, sp.extra, allMonths));
     }
     if (num(person.dme) > 0) {
       items.push(Object.assign({ category: 'ded_coins', group: label(config.events.dme.label), month: 1, allowed: num(person.dme), planned: true }, who));
@@ -330,7 +355,9 @@ function build(config, answers) {
       const charge = num(person.oon && person.oon.charge) || 0;
       if (visits > 0 && charge > 0) {
         anyOon = true;
-        const share = config.oonAllowedShare || 1;
+        const allowedEach = num(person.oon.allowed);
+        if (allowedEach == null) oonGuessed = true;
+        const share = allowedEach != null ? Math.min(1, allowedEach / charge) : config.oonAllowedShare || 1;
         const per = visits / 12;
         for (const m of allMonths) {
           items.push({ person: person.id, network: 'out', category: 'office', group: label('out-of-network visits'), month: m, count: per, billed: charge * per, allowed: charge * per * share });
@@ -370,7 +397,9 @@ function build(config, answers) {
     A(`preset-${person.id}`, text, `q-usage-${person.id}`);
   }
   if (!oonOn) A('oon', 'no out-of-network care', 'g-oon');
-  else if (anyOon) A('oon-share', `the plan recognises ${Math.round(config.oonAllowedShare * 100)}% of an out-of-network charge (a guess)`, null);
+  else if (oonGuessed) A('oon-share', `the plan allows ${Math.round(config.oonAllowedShare * 100)}% of an out-of-network bill (a guess)`, 'g-oon');
+  if (!specOn) A('spec', 'no regular specialist care', 'g-spec');
+  else if (specGuessed) A('spec-price', `a specialist visit billed at ${money(typical.office)}`, 'g-spec');
   if (!rxOn) A('rx', 'no regular prescriptions', 'g-rx');
   else if (defaultPricesUsed.size) {
     A('rx-price', `cash prices of ${[...defaultPricesUsed].map((t) => `${money(RX_DEFAULT_PRICE[t])} per ${RX_LABEL[t]} fill`).join(', ')}`, 'g-rx');
