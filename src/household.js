@@ -529,15 +529,26 @@ function tableThrough(config, table) {
   return { months, factor: 12 / months, iso: chosen ? table.through : latestIso, chosen, latestIso };
 }
 
-// One line of the table, stretched to its place in a full year at the same rate of care.
-function scaleToYear(it, factor) {
-  if (factor === 1 || NOT_SCALED.has(it.category)) return it;
-  const out = Object.assign({}, it, {
-    month: Math.min(12.99, 1 + position(it) * factor),
-    allowed: it.allowed * factor,
-    count: (it.count == null ? 1 : it.count) * factor,
-  });
-  delete out.date;
+// A point `months` after January 1, as a date. Only its order among other dates matters.
+function dateAt(year, months) {
+  const len = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let day = Math.min(364, Math.max(0, Math.ceil((months / 12) * 365 - 1e-6) - 1));
+  let m = 0;
+  while (day >= len[m]) day -= len[m++];
+  return `${year}-${String(m + 1).padStart(2, '0')}-${String(day + 1).padStart(2, '0')}`;
+}
+
+// One line of the table, moved to its place in a full year. Every line is moved, so the
+// order of the year's care stays exactly as it happened; that order decides who fills a
+// shared deductible, and so what the year costs. The amounts of everything but ER lines are
+// scaled up as well, which keeps the rate of care what it was.
+function scaleToYear(it, factor, year) {
+  if (factor === 1) return it;
+  const date = dateAt(year, position(it) * factor);
+  const out = Object.assign({}, it, { date, month: Number(date.slice(5, 7)) });
+  if (NOT_SCALED.has(it.category)) return out;
+  out.allowed = it.allowed * factor;
+  out.count = (it.count == null ? 1 : it.count) * factor;
   if (it.billed != null) out.billed = it.billed * factor;
   return out;
 }
@@ -581,7 +592,7 @@ function buildFromTable(config, answers, table) {
     })
     .map((it) => {
       const p = byName.get(String(it.person).trim().toLowerCase());
-      return scaleToYear(Object.assign({}, it, { person: p ? p.id : it.person }), through.factor);
+      return scaleToYear(Object.assign({}, it, { person: p ? p.id : it.person }), through.factor, config.planYear - 1);
     })
     .filter((it) => Math.floor(it.month || 1) <= lastMonth);
   if (all.length && through.months < 3) {

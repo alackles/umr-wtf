@@ -61,7 +61,8 @@ test('advice prompt carries every plan, its premiums, the open plan questions, a
     for (const v of p.premiums.family) assert.ok(text.includes(`$${v.toFixed(2)}`), `${p.name} premium`);
   }
   assert.ok(text.includes(HEADER.join(',')));
-  assert.ok(/`er_facility` and `er_physician` rows, which stay as they are/.test(text));
+  assert.ok(/`er_facility` and `er_physician` rows, which stay exactly as they are/.test(text));
+  assert.ok(/leaving each row where it is in the order/.test(text));
 });
 
 test('results as text: both money views, every plan, and the assumptions', () => {

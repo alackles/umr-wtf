@@ -257,12 +257,12 @@ function replayRules() {
   return [
     'To replay a row, find the plan\'s rule for its category and network in the tables above. Then, in this order:',
     '',
-    '- Copay, if the rule has one: the copay times `count`. An empty count is 1; a count of 0 means no copay.',
-    '- Deductible, if the rule names it: what is left of the allowed amount goes to the deductible, until that person\'s deductible or the family\'s is met.',
+    '- Copay, if the rule has one: the copay times `count`, and never more than the row\'s allowed amount. An empty count is 1. A count of 0 means no copay; the rest of the rule still applies to the row.',
+    '- Deductible, if the rule names it: what is left of the allowed amount goes to the deductible, until that person\'s deductible or the family\'s is met. Where the family deductible is one pooled figure, there is no separate deductible for each person.',
     '- Coinsurance, if the rule has a percentage: my share of what is still left.',
-    '- Nothing more is charged once that person\'s out-of-pocket limit, or the family\'s, is reached. Copays, deductible payments and coinsurance all count toward it.',
+    '- Nothing more is charged once that person\'s out-of-pocket limit, or the family\'s, is reached; a row that crosses a limit is charged only up to it. The limit for one person applies on every plan. Copays, deductible payments and coinsurance all count toward it.',
     '',
-    'Keep separate running totals for in-network and out-of-network rows, except where the plan table says a row counts toward the in-network limits. `preventive` rows cost nothing. `not_covered` rows are mine in full and count toward nothing. On an out-of-network row, whatever was billed above the allowed amount is also mine and counts toward nothing.',
+    'Take rows on the same date in the table\'s order, and do not round until the end. Keep separate running totals for in-network and out-of-network rows, except where the plan table says a row counts toward the in-network limits. `preventive` rows cost nothing. `not_covered` rows are mine in full and count toward nothing. On an out-of-network row, whatever was billed above the allowed amount is also mine and counts toward nothing.',
   ].join('\n');
 }
 
@@ -435,14 +435,15 @@ function advicePrompt(config) {
       '1. Who will be covered next year, and which premium figure applies to us.',
       '2. What will be different next year: care that is ending or starting, anything planned such as a surgery or a birth, someone joining or leaving the plan.',
       '3. Whether I plan to put money into an FSA or an HSA.',
+      '4. Roughly what my combined tax rate is. If I do not know, use 30% and say that you did.',
     ].join('\n')
   );
 
   p.push('## Then work out a full year on each plan');
   p.push(
     [
-      '1. Scale the table to twelve months. It holds only what happened this year. Find the latest date in it and work out how many months of the year that covers (the day of the year, divided by 365, times 12). Multiply `allowed`, `count` and `billed` on every row by 12 divided by that number. The exception is `er_facility` and `er_physician` rows, which stay as they are. The tool I am using scales the table this way, and doing the same lets your numbers be compared with its numbers.',
-      '2. Apply what I told you about next year.',
+      '1. Scale the table to twelve months. It holds only what happened this year. Find the latest date in it and work out how many months of the year that covers (the day of the year, divided by 365, times 12). Multiply `allowed`, `count` and `billed` on every row by 12 divided by that number, leaving each row where it is in the order. An empty count is 1 and is scaled like any other, so counts become fractions: 1.2 visits is 1.2 copays. The exception is `er_facility` and `er_physician` rows, which stay exactly as they are. The tool I am using scales the table this way, and doing the same lets your numbers be compared with its numbers.',
+      '2. Apply what I told you about next year. Care that is ending comes out. Anything new is added as it will be, and is not scaled.',
       '3. Replay the rows in date order under the plan\'s rules, as set out below.',
       '4. Add the year\'s premiums for my household.',
     ].join('\n')
@@ -451,8 +452,9 @@ function advicePrompt(config) {
 
   p.push('## What to show me');
   p.push(
-    'For each plan: the premiums, what we would pay for care, and the total. Where the plan facts say something is not known, show both results. Then the worst case for each plan, which is the premiums plus the in-network out-of-pocket limit. ' +
-      'Premiums come out of pay before tax and care does not, unless it is paid through an FSA or HSA. Say so where it would change the order of the plans; I do not need a full tax calculation.'
+    'For each plan: the premiums, what we would pay for care, and the total. Where the plan facts say something is not known, show the result each way, for every combination that changes it. ' +
+      'Then the worst case for each plan: the premiums, plus the in-network out-of-pocket limit (the family limit when more than one person is covered), plus whatever in the table counts toward nothing, such as `not_covered` rows. ' +
+      'Premiums come out of pay before tax and care does not, unless it is paid through an FSA or HSA. Say so where it would change the order of the plans, using the tax rate I gave you; I do not need a full tax calculation.'
   );
   p.push('Then tell me in plain words what the extra premium on the dearer plans buys, and how different next year would have to be for the cheapest plan to change. Lead with that trade. I will ask if I want your pick.');
 

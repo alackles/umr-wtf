@@ -90,8 +90,8 @@ test('a table that stops in June is doubled, except its ER visit', () => {
   assert.strictEqual(sum(by('office'), (it) => it.count), 2, 'one visit becomes two; the line riding on a visit stays at none');
   assert.strictEqual(by('ded_coins')[0].allowed, 2 * 300);
   assert.strictEqual(by('er_facility')[0].allowed, 1900);
-  assert.strictEqual(by('er_facility')[0].month, 3);
-  for (const it of hh.items) assert.ok(it.month >= 1 && it.month < 13, `month ${it.month}`);
+  assert.strictEqual(by('er_facility')[0].count, undefined);
+  for (const it of hh.items) assert.ok(it.month >= 1 && it.month <= 12 && /^\d{4}-\d\d-\d\d$/.test(it.date), `month ${it.month}, date ${it.date}`);
   assert.ok(hh.assumptions.some((as) => /through June 30/.test(as.text)));
   assert.ok(hh.assumptions.some((as) => /ER visits are counted as they happened/.test(as.text)));
 });
@@ -121,4 +121,27 @@ test('scaling and leaving mid-year together: half the stretched year is about th
   a.events.leaving = { on: true, month: 6 };
   const hh = buildFromTable(config, a, table);
   assert.strictEqual(sum(hh.items, (it) => it.allowed), 600);
+});
+
+test('scaling keeps the year in the order it happened, ER lines included', () => {
+  // Order decides who fills a pooled deductible, so the scaled year must cost exactly what
+  // the same lines cost when they are scaled where they stand. An agent following the advice
+  // prompt does the second; the page does the first; the two have to agree.
+  const csv = 'person,date,category,allowed\n' +
+    ['Sam,2099-01-20,ded_coins,900', 'Ada,2099-02-03,ded_coins,700', 'Sam,2099-02-27,er_facility,1900', 'Ada,2099-03-02,ded_coins,1200', 'Sam,2099-03-30,ded_coins,2500', 'Ada,2099-04-14,office,180', 'Sam,2099-05-05,ded_coins,3100', 'Ada,2099-06-19,ded_coins,800'].join('\n') + '\n';
+  const a = defaultAnswers(config, '2099-01-01');
+  a.people = [newPerson('p1', 'self', 'Sam'), newPerson('p2', 'child', 'Ada')];
+  const table = { items: parseTable(csv).items, groupsOff: [] };
+  const hh = buildFromTable(config, a, table);
+  const f = hh.through.factor;
+  assert.ok(f > 2 && f < 2.2);
+  const inPlace = table.items.map((it) => (/^er_/.test(it.category) ? Object.assign({}, it) : Object.assign({}, it, { allowed: it.allowed * f, count: f })));
+  const id = { Sam: 'p1', Ada: 'p2' };
+  for (const it of inPlace) it.person = id[it.person];
+  const { replay } = require('../src/engine.js');
+  for (const plan of config.plans) {
+    const page = replay(hh.items, plan, { family: true }).memberTotal;
+    const agent = replay(inPlace, plan, { family: true }).memberTotal;
+    assert.ok(Math.abs(page - agent) < 1e-6, `${plan.name}: page ${page} vs scaled in place ${agent}`);
+  }
 });
