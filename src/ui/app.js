@@ -725,22 +725,22 @@ function agentPanel() {
   const how =
     kind === 'small'
       ? [
-          h('p', { class: 'hint block' }, 'Small models usually can\'t open PDFs, so turn each EOB into text first. ', code('pdftotext'), ', part of Poppler, is free and keeps the table\'s columns in line: ', code('pdftotext -layout eob.pdf')),
+          h('p', null, 'Small models usually can\'t open PDFs, so turn each EOB into text first. ', code('pdftotext'), ', part of Poppler, is free and keeps the table\'s columns in line: ', code('pdftotext -layout eob.pdf')),
           h(
             'ul',
-            { class: 'hint block install' },
+            { class: 'install' },
             h('li', null, 'Mac: ', code('brew install poppler')),
             h('li', null, 'Linux: it is often already there. If not, ', code('sudo apt install poppler-utils'), ' on Debian or Ubuntu, or ', code('sudo dnf install poppler-utils'), ' on Fedora.'),
             h('li', null, 'If you\'re on Windows and doing this, you know more about Windows than I do, so do whatever works for you.')
           ),
-          h('p', { class: 'hint block' }, 'You can also use online converters if you feel like uploading your EOBs to a random website.'),
-          h('p', { class: 'hint block' }, 'Then paste a few EOBs at a time under the prompt. Each reply is a piece of the table: add each piece in the next step.', same),
+          h('p', null, 'You can also use online converters if you feel like uploading your EOBs to a random website.'),
+          h('p', null, 'Then paste a few EOBs at a time under the prompt. Each reply is a piece of the table: add each piece in the next step.', same),
         ]
-      : h('p', { class: 'hint block' }, 'Start a new chat, paste the prompt, and attach your EOBs. If they will not all fit in one message, send them in batches; the prompt tells the agent to expect that. It will ask you a few questions and then give you a table to bring back here.', same);
+      : h('p', null, 'Start a new chat, paste the prompt, and attach your EOBs. If they will not all fit in one message, send them in batches; the prompt tells the agent to expect that. It will ask you a few questions and then give you a table to bring back here.', same);
   return [
     h(
       'div',
-      { class: 'alert' },
+      { class: 'caution' },
       h('b', null, 'PROCEED WITH CAUTION.'),
       ' This pathway assumes you want to download ALL of your family\'s medical information from the past year and feed it to an AI agent of your choice. In some cases this may be a logical thing to do (e.g., you have a complex medical situation AND you already have an AI agent tightly integrated into your personal life or are not worried about sending this information to a private tech company). However, you should be certain this is what you want to do before you do it. ',
       h('b', null, 'If you aren\'t sure, use the other tab.')

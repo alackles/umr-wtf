@@ -171,7 +171,6 @@ table.grid td { padding: 2px 10px 2px 0; }
 
 .problem { border: 1px solid var(--bad); border-radius: 8px; padding: 10px 12px; background: var(--surface); display: grid; gap: 8px; font-size: 14px; }
 .problem ul { margin: 0; padding-left: 18px; }
-.alert { background: var(--warn-wash); color: var(--ink); border: 2px solid var(--warn-ink); border-radius: 8px; padding: 12px 14px; font-size: 15px; line-height: 1.45; }
 .page-alert { margin: -6px 0 18px; padding: 10px 14px; border: 1.5px dashed var(--ink); border-radius: 8px; font-size: 15px; line-height: 1.45; }
 
 /* ---- unlock screen (public build) ---- */
@@ -194,7 +193,7 @@ table.grid td { padding: 2px 10px 2px 0; }
 .prompt > .hint { display: block; margin-top: 6px; }
 .install { margin: 0; padding-left: 18px; }
 .install li + li { margin-top: 2px; }
-.or-advice { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--hair); font-size: 14px; }
+.or-advice { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--hair); }
 .offscreen { position: fixed; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
 pre.example { margin: 0; padding: 8px 10px; background: var(--sunk); border-radius: 8px; font-family: var(--mono); font-size: 12.5px; overflow-x: auto; }
 .help ul { margin: 6px 0; padding-left: 18px; font-size: 13.5px; }
@@ -278,7 +277,9 @@ pre.example { margin: 0; padding: 8px 10px; background: var(--sunk); border-radi
 .priority .chip { padding: 4px 9px; font-size: 13px; }
 .priority .choice { gap: 6px; }
 .pick-note { margin: 0; font-size: 14px; }
-.pick-warn { margin: 0; font-size: 14px; background: var(--warn-wash); color: var(--warn-ink); border-left: 3px solid var(--warn-ink); border-radius: 6px; padding: 7px 10px; }
+/* One style for the page's cautions: the early-bill warning and the agent caution. */
+.pick-warn, .caution { font-size: 14px; background: var(--warn-wash); color: var(--warn-ink); border-left: 3px solid var(--warn-ink); border-radius: 6px; padding: 7px 10px; }
+.pick-warn { margin: 0; }
 .trade-base { margin: 0 0 6px; font-size: 14px; color: var(--ink-2); }
 table.trade { width: 100%; border-collapse: collapse; font-size: 14px; }
 table.trade th, table.trade td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--hair); vertical-align: top; }
