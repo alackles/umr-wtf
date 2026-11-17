@@ -39,6 +39,7 @@ const DEFAULT_CLAIMS = {
   },
   accumulators: 'Each EOB also shows how much of each deductible and out-of-pocket limit had been used when it was issued.',
   labels: { er: [], preventive: [] },
+  quirks: [], // things about this administrator's EOB layout that trip a reader up
   thisYear: 'Unless the EOBs show otherwise, assume this year\'s version of each plan had the same rules as next year\'s.',
 };
 
@@ -124,7 +125,9 @@ function planFacts(config, opts = {}) {
   const unknowns = [];
   for (const p of plans) for (const u of p.unknowns || []) unknowns.push(`- ${p.name}: ${u.text}. Work it out each way and show both: ${u.options.map((o) => o.label).join('; or ')}.`);
   if (unknowns.length) out.push('', 'Not known:', '', ...unknowns);
-  if ((config.ruleNotes || []).length) out.push('', 'Notes on these plans:', '', ...config.ruleNotes.map((n) => `- ${n}`));
+  const absent = config.plans.filter((p) => !plans.includes(p));
+  const notes = (config.ruleNotes || []).filter((n) => !absent.some((p) => n.includes(p.name) || n.includes(p.short)));
+  if (notes.length) out.push('', 'Notes on these plans:', '', ...notes.map((n) => `- ${n}`));
 
   if (opts.premiums) {
     const per = config.payPeriods.premium;
@@ -164,11 +167,11 @@ function categoryGuide(config, c) {
   const such = (list) => (list && list.length ? ` (labels such as ${quoted(list)})` : '');
 
   const out = [];
-  out.push(`1. The row has an amount under "${col.notCovered}": \`not_covered\`. Use that amount as \`allowed\`.`);
+  out.push(`1. The row has an amount under "${col.notCovered}": \`not_covered\`. Use that amount as \`allowed\`, and say in the \`group\` label what the care was ("ER visit in March, refused").`);
   out.push(
-    `2. The service is emergency-room care${such(c.labels.er)}${erSkipsDeductible ? `, and nothing on the claim went to "${col.deductible}"` : ''}: ` +
-      '`er_facility` if the provider is a hospital or other facility, `er_physician` if it is a doctor or a physician group. ' +
-      `Put each emergency-room claim in as a single row, with \`allowed\` taken from the "${c.totals}" row, because the copay is charged once per visit and not once per row.`
+    `2. The claim is an emergency-room visit: at least one of its rows is labelled as emergency care${such(c.labels.er)}${erSkipsDeductible ? `, and nothing on the claim went to "${col.deductible}"` : ''}. ` +
+      'Put the whole claim in as a single row: `er_facility` if the provider is a hospital or other facility, `er_physician` if it is a doctor or a physician group. ' +
+      `Work out \`allowed\` from the "${c.totals}" row. The claim's other rows (drugs, labs, imaging) are part of the visit, and the copay is charged once per visit and can be spread over several rows, which is why the claim goes in whole.`
   );
   if (byAmount.size) {
     out.push(`3. A copay was charged. Go by the amount under "${col.copay}":`);
@@ -182,8 +185,8 @@ function categoryGuide(config, c) {
   }
   out.push(`4. Something went to "${col.deductible}", or there is an amount under "${col.coinsurance}": \`ded_coins\`. This covers hospital, outpatient, lab and imaging charges, and anything else billed on its own.`);
   out.push(`5. The plan paid the whole allowed amount and nothing was charged:`);
-  out.push(`   - \`preventive\` if it is preventive care: a checkup, a vaccine, a screening${such(c.labels.preventive)}.`);
-  out.push('   - otherwise `office` with `count` 0. That means the row rode along with a visit, such as a lab drawn during an office visit. This one is a guess, so list every row you put here.');
+  out.push(`   - \`preventive\` if it is preventive care: a checkup, a vaccine, a screening${such(c.labels.preventive)}. A lab or other extra on the same claim as a checkup, or on the same day at the same provider, is preventive too.`);
+  out.push('   - otherwise `office` with `count` 0. That means the row rode along with a visit or a treatment of some other kind, such as a lab drawn during an office visit. This one is a guess, so list every row you put here.');
   return out.join('\n');
 }
 
@@ -248,23 +251,38 @@ function example(config, c, small) {
   };
 }
 
+// How one row is charged under a plan, in words. The engine's rules, for an agent replaying a
+// year by itself.
+function replayRules() {
+  return [
+    'To replay a row, find the plan\'s rule for its category and network in the tables above. Then, in this order:',
+    '',
+    '- Copay, if the rule has one: the copay times `count`. An empty count is 1; a count of 0 means no copay.',
+    '- Deductible, if the rule names it: what is left of the allowed amount goes to the deductible, until that person\'s deductible or the family\'s is met.',
+    '- Coinsurance, if the rule has a percentage: my share of what is still left.',
+    '- Nothing more is charged once that person\'s out-of-pocket limit, or the family\'s, is reached. Copays, deductible payments and coinsurance all count toward it.',
+    '',
+    'Keep separate running totals for in-network and out-of-network rows, except where the plan table says a row counts toward the in-network limits. `preventive` rows cost nothing. `not_covered` rows are mine in full and count toward nothing. On an out-of-network row, whatever was billed above the allowed amount is also mine and counts toward nothing.',
+  ].join('\n');
+}
+
 const fence = (text) => '```\n' + text + '\n```';
 
 function columnsGuide(c, small) {
   const col = c.columns;
   const out = [
-    '- `person`: the patient\'s first name, spelled the same way every time.',
+    '- `person`: the patient\'s first name, spelled the same way every time. The patient is the person named on the claim, who is often not the person the EOB is addressed to.',
     '- `date`: the service date, as YYYY-MM-DD.',
     '- `category`: chosen with the list below.',
     `- \`allowed\`: the plan's allowed amount for the row, which is "${col.planPaid}" + "${col.copay}" + "${col.deductible}" + "${col.coinsurance}". Dollars and cents, no dollar sign. Use this and not "${col.billed}", because every plan works from the allowed amount.`,
-    '- `network`: `in`, or `out` if the EOB says the claim was processed at the out-of-network level.',
-    '- `count`: leave empty, except for the 0 that line 5 of the category list asks for.',
+    '- `network`: `out` if the EOB says the claim was processed at the out-of-network level. Otherwise `in`, including when it says nothing.',
+    small ? '- `count`: leave empty, except for the 0 that line 5 of the category list asks for.' : '- `count`: leave empty, except for the 0 that line 5 of the category list asks for, and the number of fills on a prescription row.',
     `- \`billed\`: leave empty, except on out-of-network rows, where it is "${col.billed}".`,
   ];
   out.push(
     small
       ? '- `group`: the provider\'s name as the EOB prints it.'
-      : '- `group`: a short label, so that I can switch related rows off together in the tool. Give a one-off event its own label ("ER visit in March"), give recurring care a shared one ("weekly therapy", "monthly infusion"), and put ordinary visits under something plain ("office visits").'
+      : '- `group`: a short label, so that I can switch related rows off together in the tool. Give a one-off event its own label ("ER visit in March"), give recurring care a shared one ("therapy", "monthly hospital treatment"), and put ordinary visits under something plain ("office visits"). Name groups from what you can see, such as the provider and the month; I can rename them. Put the person\'s name in the label when two people have the same kind of care.'
   );
   return out.join('\n');
 }
@@ -306,11 +324,14 @@ function tablePrompt(config) {
   );
   p.push(
     [
-      '- Leave out a row whose amounts are all zero.',
-      '- If the same claim appears on more than one EOB because it was reprocessed, use the EOB with the latest notice date, and tell me which claims those were.',
+      '- Leave out a row only when all five of those amounts are zero. The EOB\'s other columns are not needed.',
+      '- The service labels are coarse: one label can cover a visit with a copay, a checkup and urgent care. The copay amount, the provider\'s name and credentials, and what else was billed that day tell you more.',
+      '- A claim can be processed more than once. Treat two EOBs as the same claim when the patient, the provider and the service date match, even if the claim number differs, and use the later one. Leave out an EOB that only refuses a duplicate of a claim. If the original of a refused duplicate is not among the EOBs I gave you, an EOB is probably missing. Tell me about every claim you handled in one of these ways.',
       `- ${c.accumulators} You will use these in the checks below.`,
       '- Prescriptions filled at a pharmacy are not in these EOBs. You will ask me about them later.',
-    ].join('\n')
+    ]
+      .concat(c.quirks.map((q) => `- ${q}`))
+      .join('\n')
   );
 
   p.push('## The table');
@@ -343,10 +364,11 @@ function tablePrompt(config) {
   p.push(
     [
       `1. For every EOB, the rows you copied add up to its "${c.totals}" row, column by column. If one does not, read it again.`,
-      `2. ${plans.length > 1 ? `Work out which plan we are on from the deductible printed on the EOBs (it will be one of: ${plans.map((x) => x.name).join(', ')}). Then replay` : 'Replay'} the year under that plan: walk your rows in date order and apply the plan's rules from the tables above, keeping a running deductible and out-of-pocket total for each person and for the family. What your replay says each person owed should match what the EOBs say they owed, which is the sum of ${owedCols} across their EOBs, to the dollar. Where it does not, look for rows whose category gives a different charge from the one the EOB shows, and fix them.`,
-      '3. Compare each person\'s total with the out-of-pocket figure on their most recent EOB. A gap usually means a missing EOB or pharmacy copays, which count toward that figure and are not in these documents. Tell me the gap and what you think explains it.',
+      `2. ${plans.length > 1 ? `Work out which plan we are on from the in-network deductible limit for one person that the EOBs print (it will be one of: ${plans.map((x) => x.name).join(', ')}). Then replay` : 'Replay'} the year under that plan: walk your rows in date order, keeping a running deductible and out-of-pocket total for each person and for the family. What your replay says each person owed should match what the EOBs say they owed, which is the sum of ${owedCols} across their EOBs, to the dollar. Leave \`not_covered\` rows out of both sides. Where the two differ, look for rows whose category gives a different charge from the one the EOB shows, and fix them.`,
+      '3. Compare each person\'s total with the in-network out-of-pocket figure for that person on their latest EOB (the latest notice date; if several share it, the highest figure). A gap usually means a missing EOB or pharmacy copays, which count toward that figure and are not in these documents. Tell me the gap and what you think explains it.',
     ].join('\n')
   );
+  p.push(replayRules());
   p.push(
     'If, after a second look, check 1 or check 2 is still off by more than a dollar for anyone, stop there. Show me the difference for each person and the rows you suspect, and wait for my answer. A table that does not reproduce this year is not worth comparing plans with.'
   );
@@ -357,7 +379,7 @@ function tablePrompt(config) {
     [
       '1. Prescriptions. For each regular prescription: who takes it, whether it is generic, preferred brand, non-preferred brand or specialty, how many fills a month, and the full price before insurance if I can find it (a pharmacy receipt shows it). Add one row for each prescription for each month it was filled this year, with `allowed` the full price of that month\'s fills and `count` the number of fills. If I do not know the full price, use your best estimate and list it as a guess.',
       '2. Your guesses. Every row where you chose a category without being sure, with the choice you made.',
-      '3. Rows marked `not_covered`. Whether I expect that care to be covered next year. If I do, change the row to the category it would otherwise have had.',
+      '3. Rows marked `not_covered`. These are often claims the plan refused while it waited for information, not care it will never pay for. Ask whether each has since been paid, and whether I expect that kind of care to be covered next year. If so, enter it again as the care it was: an emergency-room claim as line 2 says, a visit as `office`, anything else as `ded_coins`. Use the amount shown as `allowed`, and tell me that the true allowed amount is probably lower, because a refused claim shows no discount.',
       '4. Care that is ending, or that happened only once. Give each of these its own `group` label, so that I can switch it off in the tool.',
     ].join('\n')
   );
@@ -425,18 +447,7 @@ function advicePrompt(config) {
       '4. Add the year\'s premiums for my household.',
     ].join('\n')
   );
-  p.push('To replay a row, find the plan\'s rule for its category and network in the tables above. Then, in this order:');
-  p.push(
-    [
-      '- Copay, if the rule has one: the copay times `count`.',
-      '- Deductible, if the rule names it: what is left of the allowed amount goes to the deductible, until that person\'s deductible or the family\'s is met.',
-      '- Coinsurance, if the rule has a percentage: my share of what is still left.',
-      '- Nothing more is charged once that person\'s out-of-pocket limit, or the family\'s, is reached. Copays, deductible payments and coinsurance all count toward it.',
-    ].join('\n')
-  );
-  p.push(
-    'Keep separate running totals for in-network and out-of-network rows, except where the plan table says a row counts toward the in-network limits. `preventive` rows cost nothing. `not_covered` rows are mine in full and count toward nothing. On an out-of-network row, whatever was billed above the allowed amount is also mine and counts toward nothing.'
-  );
+  p.push(replayRules());
 
   p.push('## What to show me');
   p.push(
@@ -470,6 +481,7 @@ function smallPrompt(config) {
   p.push('# The columns');
   p.push(`Each EOB has a table called "${c.table}". Write one CSV row for each service row in it. Skip the "${c.totals}" row, and skip a row whose amounts are all zero.`);
   p.push(columnsGuide(c, true));
+  if (c.quirks.length) p.push(c.quirks.map((q) => `- ${q}`).join('\n'));
 
   p.push('# Choosing the category');
   p.push('Use the first line that fits:');
