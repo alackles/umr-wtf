@@ -626,12 +626,18 @@ function eventsSection(n, a, next) {
 // ---- the claims tab: get the EOBs, hand them to an agent, bring the table back, check it ------
 // When the configuration carries a downloader script, this section offers it two ways: as a
 // link to drag to the bookmarks bar, and as text to copy into the browser's console. The page
-// only shows the script. It runs on the administrator's site, never here.
+// only shows the script. It runs on the administrator's site, never here. The steps for
+// reaching the right page there come from the configuration (claims.downloader.steps); one
+// written between ** and ** is set in bold.
 function getEobsSection(n) {
   const words = claimsWording(config);
   const script = extras.downloader;
   if (!script) return section(n, 'Get your EOBs', words.where);
-  const open = (words.downloader && words.downloader.open) || 'Log in to the member site on a computer and open its list of EOBs.';
+  const steps = (words.downloader && words.downloader.steps) || ['Log in to the member site on a computer and open its list of EOBs.'];
+  const step = (text) => {
+    const bold = /^\*\*([\s\S]*)\*\*$/.exec(text);
+    return h('li', null, bold ? h('b', null, bold[1]) : text);
+  };
   const note = h('span', { class: 'hint', role: 'status' });
   const bookmark = h(
     'a',
@@ -654,7 +660,7 @@ function getEobsSection(n) {
     h(
       'ol',
       { class: 'steps' },
-      h('li', null, open),
+      steps.map(step),
       h(
         'li',
         null,
@@ -674,8 +680,7 @@ function getEobsSection(n) {
           ),
           h('li', null, h('b', null, 'In the console. '), 'Copy the script below. On that page press F12 (Cmd+Option+J on a Mac), pick Console, paste, and press Enter. The first time, Chrome asks you to type "allow pasting".')
         )
-      ),
-      h('li', null, 'A panel opens at the top right of that page. Pick the dates and press Download. It takes about two and a half seconds for each EOB, and saves them all as one zip file. Unzip it.')
+      )
     ),
     h('p', null, 'The script runs in your own browser, in the session you logged in to. It asks for each EOB the way opening one by hand does, and sends nothing anywhere else.'),
     promptBlock('downloader', script, 'Read and copy the script', 'javascript', 'script')
