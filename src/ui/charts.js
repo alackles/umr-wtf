@@ -79,11 +79,13 @@ function place(el, key, bottom, height) {
   requestAnimationFrame(() => requestAnimationFrame(() => set(bottom, height)));
 }
 
-// out: result of outlook.evaluate.  ctx: { priority, canAbsorb, view, viewLabel, scenario, seriousLabel }
+// out: result of outlook.evaluate.
+// ctx: { priority, picked (Set of plan ids that win on it), view, viewLabel, scenario, seriousLabel }
 function stackedBars(out, ctx) {
   const plans = out.plans;
   const sKey = YEAR_WORDS[ctx.scenario] ? ctx.scenario : 'expected';
   const priority = ctx.priority;
+  const picked = ctx.picked || new Set();
   const tops = plans.map((p) => {
     return Math.max(p.scenarios.ceiling.hi, p.scenarios.bad.hi, p.scenarios[sKey].hi + p.scenarios[sKey].parts.aside);
   });
@@ -105,10 +107,13 @@ function stackedBars(out, ctx) {
   plans.forEach((p) => {
     const sc = p.scenarios[sKey];
     const parts = sc.parts;
-    const dim = p.neverCheapest && priority !== 'paycheck';
-    const col = h('div', { class: 'col' + (dim ? ' dim' : ''), role: 'group', 'aria-label': `${p.name}, ${YEAR_WORDS[sKey]}` });
+    // The plan that wins on what matters most gets a band down its column; the figure that
+    // matters for that choice is emphasised on it alone.
+    const pick = picked.has(p.id);
+    const dim = p.neverCheapest && !pick;
+    const col = h('div', { class: 'col' + (dim ? ' dim' : '') + (pick ? ' pick' : ''), role: 'group', 'aria-label': `${p.name}, ${YEAR_WORDS[sKey]}` });
     const bar = h('div', { class: 'bar-area' });
-    const hedge = p.atLeast && sKey !== 'bad' ? 'at least ' : '';
+    const hedge = p.atLeast && sKey !== 'bad';
 
     // The solid stack.
     let y = 0;
@@ -150,7 +155,7 @@ function stackedBars(out, ctx) {
     const solidTop = sc.hi + aside;
     const ceil = p.scenarios.ceiling.hi;
     const gap = Math.max(0, ceil - solidTop);
-    const outline = h('div', { class: 'outline' + (priority === 'protect' ? ' emph' : ''), tabindex: '0', role: 'img', 'aria-label': `${p.name}: worst case ${dollars(ceil)}${p.noCeiling ? ' or more' : ''}` });
+    const outline = h('div', { class: 'outline' + (pick && priority === 'protect' ? ' emph' : ''), tabindex: '0', role: 'img', 'aria-label': `${p.name}: worst case ${dollars(ceil)}${p.noCeiling ? ' or more' : ''}` });
     place(outline, `${p.id}:outline`, pct(solidTop), pct(gap));
     attachTip(outline, () =>
       h(
@@ -164,41 +169,39 @@ function stackedBars(out, ctx) {
     );
     bar.appendChild(outline);
 
-    // Labels: the year's total, and the worst case. When the outline is too short to hold
-    // the total inside it, both sit above it.
-    // The total sits just above the stack, inside the outline when there is room, on two
-    // lines when it is a range so it stays within the bar.
+    // The year's total sits just above the stack, inside the outline when there is room (on
+    // two lines when it is a range, so it stays within the bar), otherwise above the outline.
     const anchor = solidTop;
     const ranged = sc.hi - sc.lo >= 1;
-    const twoLines = ranged || !!hedge;
-    const emphTotal = !(priority === 'protect' || priority === 'paycheck');
-    const roomy = px(ceil - anchor) >= (twoLines ? 2 : 1) * (emphTotal ? 20 : 17) + (aside ? 16 : 0) + 14;
-    const totalText = (stacked) =>
-      !twoLines || !stacked ? [h('b', null, hedge + dollarsRange(sc))] : ranged ? [h('b', null, hedge + dollars(sc.lo) + ' to'), h('br'), h('b', null, dollars(sc.hi))] : [h('b', null, hedge.trim()), h('br'), h('b', null, dollars(sc.lo))];
+    const twoLines = ranged || hedge;
+    const emphTotal = pick && priority === 'normal';
+    const roomy = px(ceil - anchor) >= (twoLines ? 2 : 1) * (emphTotal ? 20 : 17) + (aside ? 16 : 0) + 6;
+    const atLeast = () => {
+      const el = h('span', { class: 'hedge', tabindex: '0' }, 'at least');
+      attachTip(el, () => h('div', null, h('div', { class: 'tip-label' }, `${p.short}: at least`), h('div', { class: 'tip-note' }, 'Someone is at their out-of-pocket cap this year, so their care beyond the cap left no trace. Saying which month they reached it sharpens this.')));
+      return el;
+    };
+    const totalText = (stacked) => {
+      const pre = hedge ? [atLeast(), ' '] : [];
+      if (!twoLines || !stacked) return [h('b', null, ...pre, dollarsRange(sc))];
+      if (ranged) return [h('b', null, ...pre, dollars(sc.lo) + ' to'), h('br'), h('b', null, dollars(sc.hi))];
+      return [h('b', null, atLeast()), h('br'), h('b', null, dollars(sc.lo))];
+    };
     const total = h('div', { class: 'tot' + (emphTotal ? ' emph' : '') }, totalText(roomy), aside ? h('small', null, `+ ${dollars(aside)} left in ${parts.account.kind.toUpperCase()}`) : null);
-    const worst = h('div', { class: 'worst' + (priority === 'protect' ? ' emph' : '') }, 'worst case ', h('b', null, dollars(ceil) + (p.noCeiling ? '+' : '')));
     col.appendChild(bar);
-    if (roomy) {
-      place(total, `${p.id}:tot`, pct(anchor), null);
-      place(worst, `${p.id}:worst`, pct(ceil), null);
-      col.appendChild(total);
-      col.appendChild(worst);
-    } else {
-      const both = h('div', { class: 'tot-stack' }, worst, total);
-      place(both, `${p.id}:both`, pct(Math.max(ceil, anchor)), null);
-      col.appendChild(both);
-    }
+    place(total, `${p.id}:tot`, pct(roomy ? anchor : Math.max(ceil, anchor)), null);
+    col.appendChild(total);
     cols.appendChild(col);
 
     const pay = p.paycheck;
     labels.appendChild(
       h(
         'div',
-        { class: 'xlabel' + (dim ? ' dim' : '') },
+        { class: 'xlabel' + (dim ? ' dim' : '') + (pick ? ' pick' : '') },
         h('h3', null, p.name),
         h(
           'p',
-          { class: 'paycheck' + (priority === 'paycheck' ? ' emph' : '') },
+          { class: 'paycheck' + (pick && priority === 'paycheck' ? ' emph' : '') },
           h('b', null, dollars(pay.total)),
           ' a paycheck',
           ctx.view === 'takehome' ? h('small', null, ` (${dollars(pay.gross)} before tax)`) : null,
@@ -217,33 +220,12 @@ function stackedBars(out, ctx) {
   if (anyAside) legend.appendChild(key('k-seg seg-aside', 'Left in the FSA or HSA after this year\'s care'));
   legend.appendChild(key('k-outline', 'On up to the worst case'));
 
-  // Longer notes, by plan, under the chart.
-  const notes = [];
-  const note = (p, cls, ...body) => notes.push(h('li', { class: cls }, h('b', null, p.short + ': '), body));
-  for (const p of plans) {
-    const acct = p.scenarios[sKey].parts.account;
-    if (p.neverCheapest) note(p, 'flag-never', 'another plan costs less in the typical year, the catastrophic year and the worst case.' + (p.smallestPaycheck ? ' It does have the smallest paycheck deduction.' : ''));
-    if (priority === 'paycheck' && ctx.canAbsorb === false && p.smallestPaycheck && plans.length > 1) {
-      note(
-        p,
-        'flag-warn',
-        `smallest deduction, and the largest possible early-year bill. You could owe up to ${dollars(p.deductibleOne)}${p.deductible > p.deductibleOne ? ` for one person (${dollars(p.deductible)} across the family)` : ''} before this plan pays for most care. You said a bill that size would be hard to absorb.`
-      );
-    }
-    if (acct) note(p, null, accountWords(acct, ctx));
-    if (p.atLeast) note(p, null, 'shown as "at least". Someone is at their out-of-pocket cap this year, so their care beyond the cap left no trace. Saying which month they hit it sharpens this.');
-    if (p.noCeiling) note(p, null, 'the worst case counts both caps and the extras from the care you described, but there is no true ceiling: charges the plan does not recognise are yours and count toward nothing.');
-    if (p.hsaBlocked) note(p, null, 'shown without the HSA tax benefit, because you are not eligible to contribute.');
-    if (p.open.length && p.scenarios[sKey].hi - p.scenarios[sKey].lo >= 1) note(p, null, 'a range, because ' + p.open.map((u) => u.text).join('; and ') + '.');
-  }
-
   return h(
     'div',
     { class: 'stack-chart' },
     legend,
     h('div', { class: 'plot' }, cols, labels),
-    h('p', { class: 'axis-title' }, `total for the ${YEAR_WORDS[sKey]}, ${ctx.viewLabel}`),
-    notes.length ? h('ul', { class: 'plan-notes' }, notes) : null
+    h('p', { class: 'axis-title' }, `total for the ${YEAR_WORDS[sKey]}, ${ctx.viewLabel}`)
   );
 }
 

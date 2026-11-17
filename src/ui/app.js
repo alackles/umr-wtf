@@ -5,7 +5,7 @@
 const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
 const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
-const { evaluate, sensitivity, sensitivitySentence, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
+const { evaluate, sensitivity, sensitivityLines, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, COLUMNS } = require('../importer.js');
 const { CATEGORIES } = require('../plans.js');
 const { stackedBars, hideTip } = require('./charts.js');
@@ -202,7 +202,6 @@ function renderForm() {
     formEl.appendChild(accounts);
     n++;
   }
-  formEl.appendChild(prioritySection(n++, a));
   formEl.appendChild(advancedSection(a, next));
 
   const layout = formEl.parentNode;
@@ -801,36 +800,6 @@ function accountsSection(n, a, next) {
   );
 }
 
-function prioritySection(n, a) {
-  const biggest = Math.max(...config.plans.map((p) => p.in.ded[0]));
-  return section(
-    n,
-    'What matters most',
-    'This changes what the chart draws attention to. It never changes the numbers.',
-    choice(
-      [
-        { value: 'normal', label: 'Lowest cost in a normal year' },
-        { value: 'protect', label: 'Protected if something big happens' },
-        { value: 'paycheck', label: 'Smallest paycheck deduction' },
-      ],
-      a.priority,
-      (v) => {
-        a.priority = a.priority === v ? null : v;
-        changed(true);
-      },
-      { id: 'q-priority', aria: 'What matters most', stack: true }
-    ),
-    h(
-      'div',
-      { class: 'gate' },
-      h('div', { class: 'gate-q' }, h('span', null, `Could you absorb a ${dollars(biggest)} bill in February?`), yesNo(a.canAbsorb, (v) => {
-        a.canAbsorb = a.canAbsorb === v ? null : v;
-        changed(true);
-      }, 'q-absorb'))
-    )
-  );
-}
-
 function advancedSection(a, next) {
   const adv = a.adv;
   const spouse = next.some((p) => p.role === 'spouse');
@@ -1120,10 +1089,39 @@ function renderResults() {
       h('span', { class: 'view-note' }, yearNote)
     )
   );
+  // What matters most: pick one and the plan that wins on it is marked on the chart.
+  const picked = winners(out, a.priority);
+  resultsEl.appendChild(
+    h(
+      'div',
+      { class: 'priority' },
+      h('span', { class: 'priority-q' }, 'What matters most to you?'),
+      choice(
+        [
+          { value: 'normal', label: 'Lowest cost in a typical year' },
+          { value: 'protect', label: 'Protected if something big happens' },
+          { value: 'paycheck', label: 'Smallest paycheck deduction' },
+        ],
+        a.priority,
+        (v) => {
+          a.priority = a.priority === v ? null : v;
+          // Show the year the choice is about, so the marked plan is visibly the one that wins.
+          if (a.priority === 'normal') ui.scenario = 'expected';
+          if (a.priority === 'protect') ui.scenario = 'bad';
+          save();
+          renderResults();
+          const again = resultsEl.querySelector(`[data-focus="q-priority:${v}"]`);
+          if (again) again.focus();
+        },
+        { id: 'q-priority', aria: 'What matters most' }
+      ),
+      picked.length ? h('p', { class: 'pick-note' }, pickNote(out, a.priority, picked)) : null
+    )
+  );
   resultsEl.appendChild(
     stackedBars(out, {
       priority: a.priority,
-      canAbsorb: a.canAbsorb,
+      picked: new Set(picked.map((p) => p.id)),
       view,
       viewLabel: view === 'takehome' ? 'in take-home pay' : 'in raw dollars',
       scenario: year,
@@ -1163,22 +1161,25 @@ function renderResults() {
   // How far off the estimate could be before a different plan cost least.
   resultsEl.appendChild(
     h(
-      'p',
-      { class: 'sens' },
-      h('b', null, 'If your estimate is off. '),
-      sensitivitySentence(res.sens, (id) => out.plans.find((p) => p.id === id).short)
+      'div',
+      { class: 'block sens' },
+      h('h3', null, 'If your estimate is off'),
+      sensitivityLines(res.sens, (id) => out.plans.find((p) => p.id === id).name).map((line) => h('p', null, line))
     )
   );
 
-  // The "assuming..." line.
+  // What the numbers assume, one per line.
   if (hh.assumptions.length) {
-    const line = h('p', { class: 'assuming' }, h('b', null, 'Assuming '));
-    hh.assumptions.forEach((as, i) => {
-      if (i) line.appendChild(document.createTextNode(i === hh.assumptions.length - 1 ? ', and ' : ', '));
-      line.appendChild(as.anchor ? jumpLink(as.text, as.anchor) : h('span', null, as.text));
-    });
-    line.appendChild(document.createTextNode('. Tap any of these to change it.'));
-    resultsEl.appendChild(line);
+    const upper = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+    resultsEl.appendChild(
+      h(
+        'div',
+        { class: 'assuming' },
+        h('b', null, 'Assuming'),
+        h('ul', null, hh.assumptions.map((as) => h('li', null, as.anchor ? jumpLink(upper(as.text), as.anchor) : upper(as.text)))),
+        h('p', { class: 'hint' }, 'Tap any of these to change it.')
+      )
+    );
   }
   if (hh.notes.length) resultsEl.appendChild(h('ul', { class: 'notes' }, hh.notes.map((nt) => h('li', null, nt.text))));
 
@@ -1220,6 +1221,29 @@ function renderResults() {
     resultsEl.appendChild(itemsHost);
   }
   footer(res);
+}
+
+// The plans that win on the chosen priority (more than one only on a tie).
+function winners(out, priority) {
+  const mid = (r) => (r.lo + r.hi) / 2;
+  const by = { normal: (p) => mid(p.scenarios.expected), protect: (p) => mid(p.scenarios.ceiling), paycheck: (p) => p.paycheck.total }[priority];
+  if (!by || out.plans.length < 2) return [];
+  const best = Math.min(...out.plans.map(by));
+  return out.plans.filter((p) => by(p) <= best + (priority === 'paycheck' ? 0.5 : 1));
+}
+
+// One line naming the marked plan and what it wins on.
+function pickNote(out, priority, picked) {
+  const names = picked.map((p) => p.name).join(' and ');
+  const many = picked.length > 1;
+  const range = { normal: 'expected', protect: 'ceiling' }[priority];
+  // Give or take: the winner's range overlaps a rival's, so an open plan question could flip it.
+  const close = range && out.plans.some((q) => !picked.includes(q) && picked.some((p) => q.scenarios[range].lo < p.scenarios[range].hi));
+  const hedge = close ? ', give or take the open plan questions' : '';
+  if (priority === 'normal') return `${names} ${many ? 'cost' : 'costs'} least in a typical year${hedge}.`;
+  if (priority === 'protect') return `${names} ${many ? 'have' : 'has'} the lowest worst case, the most a plan can cost you in a year${hedge}.`;
+  const p = picked[0];
+  return `${names} ${many ? 'take' : 'takes'} the least from each paycheck. You could owe up to ${dollars(p.deductibleOne)}${p.deductible > p.deductibleOne ? ` for one person (${dollars(p.deductible)} across the family)` : ''} before ${many ? 'either' : 'it'} pays for most care, so a bill early in the year can be large.`;
 }
 
 // What was entered, for the printed page (the form itself is not printed).
@@ -1285,6 +1309,7 @@ function footer() {
 function start(rawConfig) {
   config = validateConfig(rawConfig);
   S = load() || fresh();
+  if (S.answers.priority === 'protect') ui.scenario = 'bad'; // the year a saved choice is about
   const app = clear(document.getElementById('app'));
   document.title = `umr-wtf: ${config.planYear} plan chooser`;
   app.appendChild(

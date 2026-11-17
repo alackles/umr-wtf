@@ -236,23 +236,19 @@ function sensitivity(config, hh, opts = {}) {
   return { maxK, cheapestAtZero: crossings.length ? crossings[0].from : atEstimate, cheapestAtEstimate: atEstimate, crossings, nothingToScale };
 }
 
-// The same thing in a sentence. `short` maps a plan id to its short name.
-function sensitivitySentence(sens, short) {
-  const best = short(sens.cheapestAtEstimate);
-  if (sens.nothingToScale) return `Your estimate has no care in it beyond free checkups, so ${best} costs least. The catastrophic year and the worst case show what happens if that changes.`;
-  if (!sens.crossings.length) return `${best} costs least however much care you end up using, from none to ${sens.maxK} times your estimate.`;
+// The same thing in plain lines, one for less care and one for more. `name` maps a plan id to
+// the name to show.
+function sensitivityLines(sens, name) {
+  const best = name(sens.cheapestAtEstimate);
+  if (sens.nothingToScale) return [`Your estimate has no care in it beyond free checkups, so ${best} is cheapest. The catastrophic year shows what happens if that changes.`];
+  if (!sens.crossings.length) return [`${best} is cheapest however much care you get, from none to ${sens.maxK} times your estimate.`];
   const below = sens.crossings.filter((c) => c.k <= 1).pop();
   const above = sens.crossings.find((c) => c.k > 1);
   const pct = (k) => Math.max(5, Math.round((Math.abs(k - 1) * 100) / 5) * 5);
-  const bits = [];
-  if (below) {
-    bits.push(below.k < 0.06 ? `${short(below.from)} would only cost less with almost no care at all` : `with about ${pct(below.k)}% less care than you estimated, ${short(below.from)} would cost less`);
-  }
-  if (above) {
-    bits.push(above.k >= 2 ? `with about ${above.k.toFixed(1).replace(/\.0$/, '')} times the care, ${short(above.to)} would` : `with about ${pct(above.k)}% more care, ${short(above.to)} would`);
-  }
-  const rest = bits.join('; ');
-  return `At your estimate ${best} costs least. ${rest.charAt(0).toUpperCase()}${rest.slice(1)}.`;
+  const lines = [];
+  if (below) lines.push(below.k < 0.06 ? `If you get almost no care, ${name(below.from)} is cheapest.` : `If you get about ${pct(below.k)}% less care than estimated, ${name(below.from)} is cheapest.`);
+  if (above) lines.push(above.k >= 2 ? `If you get about ${above.k.toFixed(1).replace(/\.0$/, '')} times the care you estimated, ${name(above.to)} is cheapest.` : `If you get about ${pct(above.k)}% more care than estimated, ${name(above.to)} is cheapest.`);
+  return lines;
 }
 
-module.exports = { evaluate, sensitivity, sensitivitySentence, yearCost, breakdown, perPaycheck, premiumYear, election, SCENARIOS, SCENARIO_LABELS, JUDGED };
+module.exports = { evaluate, sensitivity, sensitivityLines, yearCost, breakdown, perPaycheck, premiumYear, election, SCENARIOS, SCENARIO_LABELS, JUDGED };

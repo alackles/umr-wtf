@@ -61,7 +61,6 @@ function defaultAnswers(config, todayIso) {
       leaving: { on: false, month: 6 },
     },
     priority: null, // 'normal' | 'protect' | 'paycheck'
-    canAbsorb: null,
     adv: {
       taxRate: 30, // percent
       fsa: null,
