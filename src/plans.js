@@ -119,12 +119,19 @@ function applyPatch(plan, patch) {
 // Where the guide is silent the configuration lists alternatives. A plan expands into one
 // variant per combination of the alternatives that matter for this household.
 //   ctx.family: more than one person covered;  ctx.rx: any prescription items in play.
+//   ctx.settled: { unknown id: option label } for questions the household's own numbers have
+//                answered. That option is applied to every variant and the question is not open.
 function expandVariants(plan, ctx = {}) {
   let variants = [{ plan, assumptions: [] }];
   const open = [];
   for (const u of plan.unknowns || []) {
     if (u.appliesTo === 'family' && !ctx.family) continue;
     if (u.appliesTo === 'rx' && !ctx.rx) continue;
+    const answer = ctx.settled && u.options.find((o) => o.label === ctx.settled[u.id]);
+    if (answer) {
+      variants = variants.map((v) => ({ plan: applyPatch(v.plan, answer.patch), assumptions: v.assumptions }));
+      continue;
+    }
     open.push(u);
     const next = [];
     for (const v of variants) {

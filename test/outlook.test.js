@@ -288,7 +288,7 @@ test('fewer dollars than the visits would cost at typical prices: next year uses
   near(byId(out, 'fern').scenarios.expected.care.lo, 6 * getPlan(config, 'fern').rules.office.copay, 1);
 });
 
-test('an open question about a pooled family deductible is settled for this year by the household\'s own numbers', () => {
+test('an open question about a pooled family deductible is settled by the household\'s own numbers, this year and next', () => {
   const open = JSON.parse(JSON.stringify(config));
   const i = open.plans.findIndex((p) => p.id === 'lichen');
   open.plans[i] = applyPatch(open.plans[i], { 'in.dedMode': 'embedded', 'out.dedMode': 'embedded' });
@@ -306,10 +306,19 @@ test('an open question about a pooled family deductible is settled for this year
   const within = build(open, answers(one - 300));
   assert.deepStrictEqual(within.problems, []);
   assert.ok(!within.notes.some((n) => n.code === 'pooled-by-numbers'));
+  assert.strictEqual(byId(evaluate(open, within, { view: 'raw' }), 'lichen').open.length, 1);
   const past = build(open, answers(one + 900));
   assert.deepStrictEqual(past.problems, []);
   assert.ok(past.notes.some((n) => n.code === 'pooled-by-numbers'));
   near(past.items.filter((it) => it.category === 'ded_coins').reduce((s, it) => s + it.allowed, 0), one + 900, 1);
+  // Next year's column is no longer a range: the same year costs what it cost, pooled.
+  const next = byId(evaluate(open, past, { view: 'raw' }), 'lichen');
+  assert.strictEqual(next.open.length, 0);
+  near(next.scenarios.expected.care.lo, one + 900, 1);
+  near(next.scenarios.expected.care.hi, one + 900, 1);
+  assert.strictEqual(next.deductibleOne, getPlan(open, 'lichen').in.ded[1]);
+  // The answer belongs to the plan it was read from, and to nobody else's question.
+  assert.deepStrictEqual(Object.keys(past.settled), ['lichen']);
   // A single person cannot be past it on any reading: that is still a mistake to report.
   const solo = answers(one + 900);
   solo.people.pop();

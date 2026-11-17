@@ -106,7 +106,7 @@ function evaluate(config, hh, opts = {}) {
   const candidates = hh.people && hh.people.length ? hh.people.map((p) => p.id) : ['someone'];
 
   const plans = config.plans.map((plan) => {
-    const { variants, open } = expandVariants(plan, { family, rx: anyRx });
+    const { variants, open } = expandVariants(plan, { family, rx: anyRx, settled: (hh.settled || {})[plan.id] });
     const per = variants.map((v) => {
       const expected = replay(expectedItems, v.plan, { family });
       // The serious event lands on whoever it would cost the household most.
@@ -154,7 +154,8 @@ function evaluate(config, hh, opts = {}) {
       premiumYear: premiumYear(config, plan, hh),
       paycheck: perPaycheck(config, plan, hh, view),
       deductible: family ? plan.in.ded[1] : plan.in.ded[0],
-      deductibleOne: family && plan.in.dedMode === 'aggregate' ? plan.in.ded[1] : plan.in.ded[0],
+      // Read off the first variant, so an open question the household's numbers settled shows here too.
+      deductibleOne: family && per[0].plan.in.dedMode === 'aggregate' ? plan.in.ded[1] : plan.in.ded[0],
       cap: ceiling(plan, family),
       scenarios,
       variants: per,
@@ -207,7 +208,7 @@ function sensitivity(config, hh, opts = {}) {
   const tier = getTier(config, hh.tierId);
   const family = hh.family != null ? hh.family : tier.family;
   const anyRx = hh.items.some((it) => /^rx_/.test(it.category));
-  const plans = config.plans.map((plan) => ({ id: plan.id, variants: expandVariants(plan, { family, rx: anyRx }).variants }));
+  const plans = config.plans.map((plan) => ({ id: plan.id, variants: expandVariants(plan, { family, rx: anyRx, settled: (hh.settled || {})[plan.id] }).variants }));
   const cheapestAt = (k) => {
     const items = hh.items.map((it) =>
       Object.assign({}, it, { allowed: it.allowed * k, count: (it.count == null ? 1 : it.count) * k, billed: it.billed == null ? undefined : it.billed * k })

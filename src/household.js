@@ -123,12 +123,14 @@ function monthly(base, yearlyCount, allowedEach, months) {
 // family deductible is pooled, the household's own numbers can settle it for this year:
 // one person's deductible met can only pass the single-person figure on a pooled plan.
 function planAsLived(plan, members) {
-  if (members.length < 2) return { plan, pooledByNumbers: null };
+  if (members.length < 2) return { plan, pooledByNumbers: null, settled: null };
   const { variants } = expandVariants(plan, { family: true, rx: false });
   const fits = (v) => v.plan.in.dedMode === 'aggregate' || members.every((p) => (num(p.dedMet) || 0) <= v.plan.in.ded[0] + TOL);
   const chosen = variants.find(fits) || variants[0];
   const over = chosen !== variants[0] ? members.find((p) => (num(p.dedMet) || 0) > plan.in.ded[0] + TOL) : null;
-  return { plan: chosen.plan, pooledByNumbers: over || null };
+  // What the numbers answered, as { unknown id: option label }, so next year's column can use it too.
+  const settled = over ? Object.fromEntries(chosen.assumptions.map((a) => [a.id, a.label])) : null;
+  return { plan: chosen.plan, pooledByNumbers: over || null, settled };
 }
 
 function build(config, answers) {
@@ -148,7 +150,7 @@ function build(config, answers) {
   const current = lived ? lived.plan : null;
   if (lived && lived.pooledByNumbers) {
     const p = lived.pooledByNumbers;
-    notes.push({ code: 'pooled-by-numbers', person: p.id, text: `${p.name}'s deductible met is more than this plan's figure for one person. That only happens when the family deductible is pooled, so this year's numbers are read that way.` });
+    notes.push({ code: 'pooled-by-numbers', person: p.id, text: `${p.name}'s deductible met is more than this plan's figure for one person. That only happens when the family deductible is pooled, so the plan is read that way, this year and next.` });
   }
   const nextYear = people.filter((p) => p.nextYear);
   const familyThisYear = thisYear.length > 1;
@@ -455,6 +457,8 @@ function build(config, answers) {
     allItems: items,
     people: nextYear.map((p) => ({ id: p.id, name: p.name })),
     lowerBound: lowerBound.filter((id) => nextIds.has(id)),
+    // Open plan questions this year's numbers answered: { plan id: { unknown id: option label } }
+    settled: lived && lived.settled ? { [chosenPlan.id]: lived.settled } : {},
     anyRx,
     anyOon,
     problems,
