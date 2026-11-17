@@ -175,27 +175,26 @@ function evaluate(config, hh, opts = {}) {
     p.smallestPaycheck = p.paycheck.total <= minPay + 0.005;
   }
 
-  // The trade in words, for each pair of plans still standing.
-  const standing = plans.filter((p) => !p.neverCheapest);
-  const trades = [];
-  for (let i = 0; i < standing.length; i++) {
-    for (let j = i + 1; j < standing.length; j++) {
-      let a = standing[i];
-      let b = standing[j];
-      if (a.paycheck.total < b.paycheck.total) [a, b] = [b, a]; // a takes more per paycheck
-      const mid = (r) => (r.lo + r.hi) / 2;
-      trades.push({
-        more: a.id,
-        less: b.id,
-        perPaycheck: a.paycheck.total - b.paycheck.total,
-        worstCase: mid(b.scenarios.ceiling) - mid(a.scenarios.ceiling), // positive: a's worst case is lower
-        expected: mid(b.scenarios.expected) - mid(a.scenarios.expected), // positive: a is cheaper in the expected year
-        expectedOverlap: !(a.scenarios.expected.hi < b.scenarios.expected.lo || b.scenarios.expected.hi < a.scenarios.expected.lo),
-      });
-    }
-  }
+  return { view, family, tierId: hh.tierId, plans };
+}
 
-  return { view, family, tierId: hh.tierId, plans, trades };
+// The trade, plan by plan, against the plan with the smallest paycheck deduction: how much more
+// each takes per paycheck, and the difference in its worst case and its typical year. Year
+// differences are ranges across the unknowns (this plan's lowest minus the other's highest, and
+// the reverse), so a difference that depends on an open plan question shows as one.
+function tradeTable(out) {
+  const plans = out.plans.slice().sort((a, b) => a.paycheck.total - b.paycheck.total);
+  const base = plans[0];
+  const diff = (a, b) => ({ lo: a.lo - b.hi, hi: a.hi - b.lo });
+  return {
+    base: base.id,
+    rows: plans.slice(1).map((p) => ({
+      id: p.id,
+      perPaycheck: p.paycheck.total - base.paycheck.total,
+      worst: diff(p.scenarios.ceiling, base.scenarios.ceiling),
+      typical: diff(p.scenarios.expected, base.scenarios.expected),
+    })),
+  };
 }
 
 // How far would the estimate have to be off before a different plan came out cheapest?
@@ -244,11 +243,12 @@ function sensitivityLines(sens, name) {
   if (!sens.crossings.length) return [`${best} is cheapest however much care you get, from none to ${sens.maxK} times your estimate.`];
   const below = sens.crossings.filter((c) => c.k <= 1).pop();
   const above = sens.crossings.find((c) => c.k > 1);
-  const pct = (k) => Math.max(5, Math.round((Math.abs(k - 1) * 100) / 5) * 5);
+  // As a multiple of the estimate, to the nearest 0.05: 0.6x, 1.15x, 2x.
+  const times = (k) => `${String(Math.round(k * 20) / 20)}x`;
   const lines = [];
-  if (below) lines.push(below.k < 0.06 ? `If you get almost no care, ${name(below.from)} is cheapest.` : `If you get about ${pct(below.k)}% less care than estimated, ${name(below.from)} is cheapest.`);
-  if (above) lines.push(above.k >= 2 ? `If you get about ${above.k.toFixed(1).replace(/\.0$/, '')} times the care you estimated, ${name(above.to)} is cheapest.` : `If you get about ${pct(above.k)}% more care than estimated, ${name(above.to)} is cheapest.`);
+  if (below) lines.push(below.k < 0.06 ? `If you get almost no care, ${name(below.from)} is cheapest.` : `If you get about ${times(below.k)} the care you estimated, ${name(below.from)} is cheapest.`);
+  if (above) lines.push(`If you get about ${times(above.k)} the care you estimated, ${name(above.to)} is cheapest.`);
   return lines;
 }
 
-module.exports = { evaluate, sensitivity, sensitivityLines, yearCost, breakdown, perPaycheck, premiumYear, election, SCENARIOS, SCENARIO_LABELS, JUDGED };
+module.exports = { evaluate, tradeTable, sensitivity, sensitivityLines, yearCost, breakdown, perPaycheck, premiumYear, election, SCENARIOS, SCENARIO_LABELS, JUDGED };

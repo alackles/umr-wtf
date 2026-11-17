@@ -5,7 +5,7 @@
 const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
 const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
-const { evaluate, sensitivity, sensitivityLines, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
+const { evaluate, tradeTable, sensitivity, sensitivityLines, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, COLUMNS } = require('../importer.js');
 const { CATEGORIES } = require('../plans.js');
 const { stackedBars, hideTip } = require('./charts.js');
@@ -1115,7 +1115,7 @@ function renderResults() {
         },
         { id: 'q-priority', aria: 'What matters most' }
       ),
-      picked.length ? h('p', { class: 'pick-note' }, pickNote(out, a.priority, picked)) : null
+      picked.length ? pickNote(out, a.priority, picked).map((line, i) => h('p', { class: i ? 'pick-warn' : 'pick-note' }, line)) : null
     )
   );
   resultsEl.appendChild(
@@ -1129,33 +1129,52 @@ function renderResults() {
     })
   );
 
-  // The trade in words.
-  if (out.trades.length) {
-    const nameOf = (id) => out.plans.find((p) => p.id === id).short;
-    const list = h('ul', { class: 'trades' });
-    for (const tr of out.trades) {
-      const A = nameOf(tr.more);
-      const B = nameOf(tr.less);
-      let s;
-      if (tr.perPaycheck < 0.5) s = `${A} and ${B} cost the same per paycheck`;
-      else s = `${A} costs ${dollars(tr.perPaycheck)} more per paycheck than ${B}`;
-      if (tr.worstCase > 0.5) s += ` and lowers your worst case by ${dollars(tr.worstCase)}.`;
-      else if (tr.worstCase < -0.5) s += `, and its worst case is ${dollars(-tr.worstCase)} higher.`;
-      else s += ', with the same worst case.';
-      let e;
-      if (tr.expectedOverlap && Math.abs(tr.expected) < 120) e = ' In the year you described they come out about the same.';
-      else if (tr.expected > 0) e = ` In the year you described, ${A} comes out ${dollars(tr.expected)} ahead${tr.expectedOverlap ? ', give or take the unknowns' : ''}.`;
-      else e = ` In the year you described, ${B} comes out ${dollars(-tr.expected)} ahead${tr.expectedOverlap ? ', give or take the unknowns' : ''}.`;
-      list.appendChild(h('li', null, s + e));
-    }
-    resultsEl.appendChild(h('div', { class: 'block' }, h('h3', null, 'The trade'), list));
-  } else {
-    const standing = out.plans.filter((p) => !p.neverCheapest);
-    if (standing.length === 1 && out.plans.length > 1) {
-      resultsEl.appendChild(
-        h('div', { class: 'block' }, h('h3', null, 'The trade'), h('p', null, `For your answers there is no trade to weigh over a year: ${standing[0].name} costs least in the typical year, the catastrophic year and the worst case. The others only win on the size of the paycheck deduction.`))
-      );
-    }
+  // The trade, as a table: each plan against the one that takes least from each paycheck.
+  if (out.plans.length > 1) {
+    const tt = tradeTable(out);
+    const nameOf = (id) => out.plans.find((p) => p.id === id).name;
+    // A difference in dollars, worded; a range when it depends on an open plan question.
+    const worded = (r) => {
+      const d = (v) => dollars(Math.abs(v));
+      if (r.hi - r.lo < 1) {
+        const v = (r.lo + r.hi) / 2;
+        return Math.abs(v) < 0.5 ? 'the same' : `${d(v)} ${v > 0 ? 'higher' : 'lower'}`;
+      }
+      if (r.lo >= 0) return `${d(r.lo)} to ${d(r.hi)} higher`;
+      if (r.hi <= 0) return `${d(r.hi)} to ${d(r.lo)} lower`;
+      return `${d(r.lo)} lower to ${d(r.hi)} higher`;
+    };
+    resultsEl.appendChild(
+      h(
+        'div',
+        { class: 'block' },
+        h('h3', null, 'The trade'),
+        h('p', { class: 'trade-base' }, `Compared with ${nameOf(tt.base)}, which takes the least from each paycheck:`),
+        h(
+          'div',
+          { class: 'rows-wrap' },
+          h(
+            'table',
+            { class: 'trade' },
+            h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'You spend'), h('th', null, 'Your worst case'), h('th', null, 'Your typical year'))),
+            h(
+              'tbody',
+              null,
+              tt.rows.map((r) =>
+                h(
+                  'tr',
+                  null,
+                  h('th', { scope: 'row' }, nameOf(r.id)),
+                  h('td', null, r.perPaycheck < 0.5 ? 'the same a paycheck' : `${dollars(r.perPaycheck)} more a paycheck`),
+                  h('td', null, worded(r.worst)),
+                  h('td', null, worded(r.typical))
+                )
+              )
+            )
+          )
+        )
+      )
+    );
   }
 
   // How far off the estimate could be before a different plan cost least.
@@ -1176,7 +1195,8 @@ function renderResults() {
         'div',
         { class: 'assuming' },
         h('b', null, 'Assuming'),
-        h('ul', null, hh.assumptions.map((as) => h('li', null, as.anchor ? jumpLink(upper(as.text), as.anchor) : upper(as.text)))),
+        // The ones a tap can change first; the fixed ones together at the end.
+        h('ul', null, [...hh.assumptions.filter((as) => as.anchor), ...hh.assumptions.filter((as) => !as.anchor)].map((as) => h('li', null, as.anchor ? jumpLink(upper(as.text), as.anchor) : upper(as.text)))),
         h('p', { class: 'hint' }, 'Tap any of these to change it.')
       )
     );
@@ -1232,7 +1252,7 @@ function winners(out, priority) {
   return out.plans.filter((p) => by(p) <= best + (priority === 'paycheck' ? 0.5 : 1));
 }
 
-// One line naming the marked plan and what it wins on.
+// A line naming the marked plan and what it wins on, and for the paycheck choice a warning.
 function pickNote(out, priority, picked) {
   const names = picked.map((p) => p.name).join(' and ');
   const many = picked.length > 1;
@@ -1240,10 +1260,13 @@ function pickNote(out, priority, picked) {
   // Give or take: the winner's range overlaps a rival's, so an open plan question could flip it.
   const close = range && out.plans.some((q) => !picked.includes(q) && picked.some((p) => q.scenarios[range].lo < p.scenarios[range].hi));
   const hedge = close ? ', give or take the open plan questions' : '';
-  if (priority === 'normal') return `${names} ${many ? 'cost' : 'costs'} least in a typical year${hedge}.`;
-  if (priority === 'protect') return `${names} ${many ? 'have' : 'has'} the lowest worst case, the most a plan can cost you in a year${hedge}.`;
+  if (priority === 'normal') return [`${names} ${many ? 'cost' : 'costs'} least in a typical year${hedge}.`];
+  if (priority === 'protect') return [`${names} ${many ? 'have' : 'has'} the lowest worst case, the most a plan can cost you in a year${hedge}.`];
   const p = picked[0];
-  return `${names} ${many ? 'take' : 'takes'} the least from each paycheck. You could owe up to ${dollars(p.deductibleOne)}${p.deductible > p.deductibleOne ? ` for one person (${dollars(p.deductible)} across the family)` : ''} before ${many ? 'either' : 'it'} pays for most care, so a bill early in the year can be large.`;
+  return [
+    `${names} ${many ? 'take' : 'takes'} the least from each paycheck.`,
+    `You could owe up to ${dollars(p.deductibleOne)}${p.deductible > p.deductibleOne ? ` for one person (${dollars(p.deductible)} across the family)` : ''} before ${many ? 'either' : 'it'} pays for most care, so a bill early in the year can be large.`,
+  ];
 }
 
 // What was entered, for the printed page (the form itself is not printed).

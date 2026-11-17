@@ -174,7 +174,7 @@ function stackedBars(out, ctx) {
     const anchor = solidTop;
     const ranged = sc.hi - sc.lo >= 1;
     const twoLines = ranged || hedge;
-    const emphTotal = pick && priority === 'normal';
+    const emphTotal = pick && (priority === 'normal' || priority === 'protect');
     const roomy = px(ceil - anchor) >= (twoLines ? 2 : 1) * (emphTotal ? 20 : 17) + (aside ? 16 : 0) + 6;
     const atLeast = () => {
       const el = h('span', { class: 'hedge', tabindex: '0' }, 'at least');

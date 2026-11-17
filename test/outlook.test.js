@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { validateConfig, getPlan } = require('../src/plans.js');
 const { build, defaultAnswers, newPerson } = require('../src/household.js');
-const { evaluate, sensitivity, sensitivityLines, yearCost, perPaycheck, breakdown } = require('../src/outlook.js');
+const { evaluate, tradeTable, sensitivity, sensitivityLines, yearCost, perPaycheck, breakdown } = require('../src/outlook.js');
 
 const config = validateConfig(require('../demo/plans.demo.json'));
 const near = (got, want, tol = 0.01) => assert.ok(Math.abs(got - want) <= tol, `got ${got}, want ${want}`);
@@ -169,11 +169,14 @@ test('"never the cheapest": judged on yearly totals, with the paycheck noted sep
   const lichen = byId(out, 'lichen');
   assert.strictEqual(lichen.neverCheapest, true);
   assert.strictEqual(lichen.smallestPaycheck, true); // ...while still having the smallest deduction
-  assert.ok(out.trades.every((t) => t.more !== 'lichen' && t.less !== 'lichen'), 'trades only between plans still standing');
-  const t = out.trades[0];
-  assert.strictEqual(t.more, 'fern');
-  near(t.perPaycheck, 140 - 105);
-  near(t.worstCase, 105 * 26 + 3300 - (140 * 26 + 1800));
+  // The trade table compares every plan with the smallest deduction, in paycheck order.
+  const tt = tradeTable(out);
+  assert.strictEqual(tt.base, 'lichen');
+  assert.deepStrictEqual(tt.rows.map((r) => r.id), ['moss', 'fern']);
+  const [moss, fern] = tt.rows;
+  near(fern.perPaycheck - moss.perPaycheck, 140 - 105);
+  near(fern.worst.lo - moss.worst.lo, 140 * 26 + 1800 - (105 * 26 + 3300));
+  near(fern.worst.lo, fern.worst.hi); // nothing unknown for one person here
 });
 
 test('every scenario comes with its pieces, and they add up to its cost', () => {
@@ -228,7 +231,7 @@ test('how far off the estimate could be: where the cheapest plan changes, and th
   const short = (id) => out.plans.find((p) => p.id === id).short;
   const lines = sensitivityLines(sens, short);
   assert.ok(lines.length >= 1 && lines.length <= 2);
-  for (const line of lines) assert.match(line, /^If you get (about \d+% (less|more) care than estimated|about [\d.]+ times the care you estimated|almost no care), \w+ is cheapest\.$/);
+  for (const line of lines) assert.match(line, /^If you get (about [\d.]+x the care you estimated|almost no care), \w+ is cheapest\.$/);
   // No care to scale: nothing can change, and the sentence says so.
   const none = sensitivity(config, build(config, single({ usage: 'counts', counts: { office: 0, therapy: 0, urgent: 0, er: 0 } })), { view: 'raw' });
   assert.deepStrictEqual(none.crossings, []);
