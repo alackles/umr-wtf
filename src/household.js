@@ -40,7 +40,7 @@ function newPerson(id, role, name) {
     capMonth: null,
     rx: {}, // { rx_generic: { fills, price }, ... }  fills per month
     oon: { visits: null, charge: null, allowed: null }, // visits per year; billed and allowed per visit
-    specialists: [], // [{ id, name, visits (a year), cost (billed per visit), since: 'year' | 2..12 | 'next' }]
+    regular: [], // regular care that isn't an office visit: [{ id, name, times (a year), cost (billed each time), since: 'year' | 2..12 | 'next' }]
     dme: null, // medical equipment next year, total charges
     trust: null, // 'dollars' | 'counts' when the inputs disagree
   };
@@ -52,7 +52,7 @@ function defaultAnswers(config, todayIso) {
     currentPlan: undefined, // undefined: not answered yet. null: no plan this year.
     people: [newPerson('p1', 'self')],
     familyMet: { ded: null, oop: null },
-    gates: { rx: null, oon: null, spec: null, hsa: null },
+    gates: { rx: null, regular: null, oon: null, hsa: null },
     hsa: { selfMedicare: false, spouseFsa: false },
     events: {
       birth: { on: false, person: null, month: 6, allowed: null },
@@ -153,14 +153,13 @@ function build(config, answers) {
 
   const rxOn = answers.gates && answers.gates.rx === true;
   const oonOn = answers.gates && answers.gates.oon === true;
-  const specOn = answers.gates && answers.gates.spec === true;
+  const regularOn = answers.gates && answers.gates.regular === true;
   const lowerBound = []; // people whose charges are only a lower bound
   const defaultPricesUsed = new Set();
   const presetsUsed = [];
   let anyRx = false;
   let anyOon = false;
   let oonGuessed = false;
-  let specGuessed = false;
 
   const leaving = answers.events && answers.events.leaving && answers.events.leaving.on;
   const lastMonth = leaving ? Math.min(12, Math.max(1, num(answers.events.leaving.month) || 12)) : 12;
@@ -169,18 +168,21 @@ function build(config, answers) {
 
   for (const person of people) {
     const onPlan = !!current && person.thisYear;
-    // Specialists: each visit is an office visit at up to the typical price (a copay where the
-    // plan has one); whatever a visit is billed beyond that (scans, infusions, procedures) goes
-    // through the deductible and coinsurance.
-    const specs = specOn
-      ? (person.specialists || [])
-          .map((sp) => {
-            const cost = num(sp.cost) != null ? num(sp.cost) : typical.office;
-            if (num(sp.cost) == null && num(sp.visits) > 0) specGuessed = true;
-            return { name: String(sp.name || '').trim(), visits: num(sp.visits) || 0, visit: Math.min(cost, typical.office), extra: Math.max(0, cost - typical.office), since: sp.since };
-          })
-          .filter((sp) => sp.visits > 0)
-      : [];
+    // Regular care that isn't an office visit (infusions, scans, dialysis, lab work billed on its
+    // own): through the deductible and coinsurance. Visits, specialists' included, are counted
+    // under "how much care". No default price: these range too widely for one to mean anything.
+    const regular = [];
+    for (const r of regularOn ? person.regular || [] : []) {
+      const times = num(r.times) || 0;
+      const cost = num(r.cost);
+      if (!(times > 0)) continue;
+      const name = String(r.name || '').trim();
+      if (cost == null) {
+        notes.push({ code: 'regular-unpriced', person: person.id, text: `${person.name}: ${name || 'one kind of regular care'} has no price, so it isn't counted.` });
+        continue;
+      }
+      regular.push({ name, times, cost, since: r.since });
+    }
     const preset = PRESETS[person.usage] || null;
     const counted = person.usage === 'counts';
     if (!preset && !counted) {
@@ -233,16 +235,13 @@ function build(config, answers) {
         { category: 'er_physician', count: ytd.er, allowedEach: typical.er_physician },
       ];
       for (const r of rx) usage.push({ category: r.tier, count: r.fills * elapsed, allowedEach: r.price });
-      // Specialist care already under way is part of this year's dollars: list it, so it
-      // explains them instead of being scaled up as other care and then added again.
-      const specUsage = [];
-      for (const sp of specs) {
-        const from = sp.since === 'next' ? null : Number(sp.since) >= 2 ? Number(sp.since) : 1;
-        const visits = from == null ? 0 : (sp.visits * Math.max(0, elapsed - (from - 1))) / 12;
-        specUsage.push({ category: 'office', count: visits, allowedEach: sp.visit });
-        if (sp.extra > 0) specUsage.push({ category: 'ded_coins', count: visits, allowedEach: sp.extra });
-      }
-      usage.push(...specUsage);
+      // Regular care already under way is part of this year's dollars: list it, so it explains
+      // them instead of being scaled up as other care and then added again.
+      const regularUsage = regular.map((r) => {
+        const from = r.since === 'next' ? null : Number(r.since) >= 2 ? Number(r.since) : 1;
+        return { category: 'ded_coins', count: from == null ? 0 : (r.times * Math.max(0, elapsed - (from - 1))) / 12, allowedEach: r.cost };
+      });
+      usage.push(...regularUsage);
 
       const atOwnCap = oopMet >= current.in.oop[0] - TOL;
       const censored = atOwnCap || (familyThisYear && familyCapMet);
@@ -286,10 +285,10 @@ function build(config, answers) {
       erVisits = ytd.er * est.usageScale;
 
       recurring = Math.max(0, est.residual) * fCharges;
-      if (specUsage.length && !censored) {
+      if (regularUsage.some((u) => u.count > 0) && !censored) {
         const listed = splitUsage(current, usage).throughDed * est.usageScale;
         if (listed > est.charges + 100) {
-          notes.push({ code: 'spec-large', person: person.id, text: `${person.name}: the care listed would have put about ${money(listed)} through the deductible so far, more than the ${money(est.charges)} these numbers show. Next year uses the specialist figures as given.` });
+          notes.push({ code: 'regular-large', person: person.id, text: `${person.name}: the care listed would have put about ${money(listed)} through the deductible so far, more than the ${money(est.charges)} these numbers show. Next year uses the regular care as given.` });
         }
       }
       if (censored && !capMonth) lowerBound.push(person.id);
@@ -338,10 +337,8 @@ function build(config, answers) {
       const base = Object.assign({ category: 'ded_coins', group: label('labs, imaging, hospital and other care') }, who);
       for (const m of allMonths) items.push(Object.assign({}, base, { month: m, allowed: recurring / 12 }));
     }
-    for (const sp of specs) {
-      const group = label(sp.name ? `${sp.name} visits` : 'specialist visits');
-      items.push(...monthly(Object.assign({ category: 'office', group }, who), sp.visits, sp.visit, allMonths));
-      if (sp.extra > 0) items.push(...monthly(Object.assign({ category: 'ded_coins', group }, who), sp.visits, sp.extra, allMonths));
+    for (const r of regular) {
+      items.push(...monthly(Object.assign({ category: 'ded_coins', group: label(r.name || 'regular care') }, who), r.times, r.cost, allMonths));
     }
     if (num(person.dme) > 0) {
       items.push(Object.assign({ category: 'ded_coins', group: label(config.events.dme.label), month: 1, allowed: num(person.dme), planned: true }, who));
@@ -398,8 +395,7 @@ function build(config, answers) {
   }
   if (!oonOn) A('oon', 'no out-of-network care', 'g-oon');
   else if (oonGuessed) A('oon-share', `the plan allows ${Math.round(config.oonAllowedShare * 100)}% of an out-of-network bill (a guess)`, 'g-oon');
-  if (!specOn) A('spec', 'no regular specialist care', 'g-spec');
-  else if (specGuessed) A('spec-price', `a specialist visit billed at ${money(typical.office)}`, 'g-spec');
+  if (!regularOn) A('regular', 'no regular care beyond office visits', 'g-regular');
   if (!rxOn) A('rx', 'no regular prescriptions', 'g-rx');
   else if (defaultPricesUsed.size) {
     A('rx-price', `cash prices of ${[...defaultPricesUsed].map((t) => `${money(RX_DEFAULT_PRICE[t])} per ${RX_LABEL[t]} fill`).join(', ')}`, 'g-rx');

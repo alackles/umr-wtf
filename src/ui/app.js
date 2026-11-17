@@ -4,7 +4,7 @@
 
 const { h, dollars, dollarsRange, parseNumber, clear } = require('./dom.js');
 const { validateConfig, getPlan, RX_TIERS } = require('../plans.js');
-const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts, typicalAllowed } = require('../household.js');
+const { build, buildFromTable, defaultAnswers, newPerson, PRESETS, RX_DEFAULT_PRICE, RX_LABEL, MONTHS, describeCounts } = require('../household.js');
 const { evaluate, sensitivity, sensitivitySentence, SCENARIOS, SCENARIO_LABELS } = require('../outlook.js');
 const { parseTable, toCsv, COLUMNS } = require('../importer.js');
 const { CATEGORIES } = require('../plans.js');
@@ -503,42 +503,41 @@ function gatesSection(n, a, current, onPlan, next) {
     )
   );
 
-  const typicalOffice = typicalAllowed(config, a).office;
-  const sinceSelect = (sp, p) =>
+  const sinceSelect = (r, p) =>
     h(
       'select',
       {
-        'aria-label': `${p.name}: when ${sp.name || 'this specialist'} started`,
+        'aria-label': `${p.name}: when ${r.name || 'this'} started`,
         onchange: (e) => {
           const v = e.target.value;
-          sp.since = v === 'year' || v === 'next' ? v : Number(v);
+          r.since = v === 'year' || v === 'next' ? v : Number(v);
           changed(false);
         },
       },
-      h('option', { value: 'year', selected: !sp.since || sp.since === 'year' }, 'all of this year'),
-      MONTHS.slice(1).map((m, i) => h('option', { value: i + 2, selected: sp.since === i + 2 }, `since ${m}`)),
-      h('option', { value: 'next', selected: sp.since === 'next' }, 'starting next year')
+      h('option', { value: 'year', selected: !r.since || r.since === 'year' }, 'all of this year'),
+      MONTHS.slice(1).map((m, i) => h('option', { value: i + 2, selected: r.since === i + 2 }, `since ${m}`)),
+      h('option', { value: 'next', selected: r.since === 'next' }, 'starting next year')
     );
-  const specPanel = everyone.map((p) => {
-    if (!p.specialists) p.specialists = [];
+  const regularPanel = everyone.map((p) => {
+    if (!p.regular) p.regular = [];
     const onPlanP = !!current && p.thisYear;
-    const rows = p.specialists.map((sp) =>
+    const rows = p.regular.map((r) =>
       h(
         'div',
-        { class: 'spec-row' },
+        { class: 'care-row' },
         h(
           'div',
           { class: 'pair' },
-          field('Kind of specialist', h('input', { type: 'text', class: 'name', value: sp.name || '', placeholder: 'e.g. neurology', 'aria-label': `${p.name}: kind of specialist`, onchange: (e) => {
-            sp.name = e.target.value.trim();
+          field('What it is', h('input', { type: 'text', class: 'name', value: r.name || '', placeholder: 'e.g. infusion', 'aria-label': `${p.name}: what the care is`, onchange: (e) => {
+            r.name = e.target.value.trim();
             changed(false);
           } })),
-          field('Visits a year', numberBox(sp, 'visits', { placeholder: '0', aria: `${p.name}: ${sp.name || 'specialist'} visits a year` })),
-          field('Billed per visit', numberBox(sp, 'cost', { prefix: '$', placeholder: String(typicalOffice), aria: `${p.name}: ${sp.name || 'specialist'} billed per visit` })),
-          onPlanP ? field('Seeing them', sinceSelect(sp, p)) : null
+          field('Times a year', numberBox(r, 'times', { placeholder: '0', aria: `${p.name}: ${r.name || 'care'} times a year` })),
+          field('Billed each time', numberBox(r, 'cost', { prefix: '$', aria: `${p.name}: ${r.name || 'care'} billed each time` })),
+          onPlanP ? field('Getting it', sinceSelect(r, p)) : null
         ),
-        h('button', { type: 'button', class: 'link', 'aria-label': `Remove ${sp.name || 'this specialist'} for ${p.name}`, onclick: () => {
-          p.specialists = p.specialists.filter((q) => q !== sp);
+        h('button', { type: 'button', class: 'link', 'aria-label': `Remove ${r.name || 'this'} for ${p.name}`, onclick: () => {
+          p.regular = p.regular.filter((q) => q !== r);
           changed(true);
         } }, 'remove')
       )
@@ -548,17 +547,17 @@ function gatesSection(n, a, current, onPlan, next) {
       { class: 'person-block' },
       h('h3', null, p.name),
       rows,
-      h('button', { type: 'button', class: 'btn', 'data-focus': `spec-add:${p.id}`, onclick: () => {
-        p.specialists.push({ id: 's' + Date.now().toString(36) + ui.uid++, name: '', visits: null, cost: null, since: 'year' });
+      h('button', { type: 'button', class: 'btn', 'data-focus': `regular-add:${p.id}`, onclick: () => {
+        p.regular.push({ id: 'r' + Date.now().toString(36) + ui.uid++, name: '', times: null, cost: null, since: 'year' });
         changed(true);
-      } }, p.specialists.length ? '+ another specialist' : '+ add a specialist')
+      } }, p.regular.length ? '+ another kind' : '+ add a kind of care')
     );
   });
-  specPanel.push(
+  regularPanel.push(
     h(
       'p',
       { class: 'hint block' },
-      'Billed per visit is the bill before insurance; an old EOB shows it as the "allowed amount". On a plan with an office copay the visit itself costs the copay, and whatever a visit is billed beyond a typical office visit (scans, infusions, procedures) goes through the deductible. Leave these visits out of the counts under "How much care".'
+      'Billed each time is the bill before insurance; an old EOB shows it as the "allowed amount". There is no typical figure for these, so a line without one is not counted. The tool sends care like this through the deductible and coinsurance. Count lab work here only if it is billed on its own, not drawn during a visit. Visits themselves, specialists\' included, go in the counts under "How much care".'
     )
   );
 
@@ -567,7 +566,7 @@ function gatesSection(n, a, current, onPlan, next) {
     'Additional considerations',
     'Common, not universal, and each one changes the numbers a lot. Each "yes" opens a few more boxes. Each "no" is taken at its word and listed under the chart.',
     gate(a, 'rx', 'Does anyone take regular prescriptions?', rxPanel),
-    gate(a, 'spec', 'Does anyone see a specialist regularly?', specPanel),
+    gate(a, 'regular', h('span', null, 'Does anyone get regular care that isn\'t an office visit?', h('span', { class: 'gate-sub' }, 'Infusions, scans, dialysis, lab work billed on its own.')), regularPanel),
     gate(a, 'oon', 'Does anyone see a provider who doesn\'t take your insurance?', oonPanel)
   );
 }

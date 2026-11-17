@@ -166,13 +166,14 @@ label.btn { position: relative; }
 .gate { border-top: 1px solid var(--hair); padding-top: 10px; }
 .gate-q { display: flex; gap: 12px; justify-content: space-between; align-items: center; }
 .gate-q > span { font-weight: 550; }
+.gate-sub { display: block; font-weight: 400; font-size: 13px; color: var(--ink-2); margin-top: 2px; }
 .gate-q .choice { flex: none; flex-wrap: nowrap; }
 .panel { margin-top: 10px; background: var(--sunk); border-radius: 8px; padding: 12px; display: grid; gap: 10px; }
 .panel .person-block:first-child { border-top: 0; padding-top: 0; }
 .person-block > .btn { justify-self: start; }
-.spec-row { display: grid; gap: 4px; justify-items: start; }
-.spec-row > .pair { width: 100%; }
-.spec-row + .spec-row { border-top: 1px dashed var(--line); padding-top: 8px; }
+.care-row { display: grid; gap: 4px; justify-items: start; }
+.care-row > .pair { width: 100%; }
+.care-row + .care-row { border-top: 1px dashed var(--line); padding-top: 8px; }
 table.grid { border-collapse: collapse; font-size: 13.5px; }
 table.grid th { font-weight: 400; color: var(--ink-2); text-align: left; padding: 2px 10px 2px 0; }
 table.grid td { padding: 2px 10px 2px 0; }
