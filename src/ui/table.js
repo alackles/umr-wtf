@@ -13,7 +13,6 @@ const UNGROUPED = '(no group)';
 //   items        array of line items (mutated in place when editable)
 //   editable     boolean
 //   groupsOff    array of labels switched off (mutated)
-//   oneoffGroups object label -> boolean (mutated; editable only)
 //   open         Set of labels currently expanded (mutated)
 //   personName   (id) => display name
 //   onChange     (structural) => void
@@ -36,7 +35,6 @@ function itemsTable(opts) {
   for (const [label, idxs] of groups) {
     const off = opts.groupsOff.includes(label);
     const total = idxs.reduce((s, i) => s + (Number(items[i].allowed) || 0), 0);
-    const flagged = editable && Object.prototype.hasOwnProperty.call(opts.oneoffGroups, label) ? !!opts.oneoffGroups[label] : idxs.every((i) => items[i].oneoff);
     const planned = idxs.every((i) => items[i].planned);
     const isOpen = opts.open.has(label);
 
@@ -69,32 +67,14 @@ function itemsTable(opts) {
           },
         })
       : h('span', { class: 'grp-name' }, label);
-    const oneoff = editable
-      ? h(
-          'label',
-          { class: 'tag-check', title: 'One-offs are left out of the quiet year' },
-          h('input', {
-            type: 'checkbox',
-            checked: flagged,
-            onchange: (e) => {
-              opts.oneoffGroups[label] = e.target.checked;
-              opts.onChange(false);
-            },
-          }),
-          ' one-off'
-        )
-      : flagged
-        ? h('span', { class: 'tag' }, 'one-off')
-        : planned
-          ? h('span', { class: 'tag' }, 'planned')
-          : null;
+    const tag = !editable && planned ? h('span', { class: 'tag' }, 'planned') : null;
     const head = h(
       'div',
       { class: 'grp-head' + (off ? ' off' : '') },
       toggle,
       title,
       h('span', { class: 'grp-meta' }, `${idxs.length} ${idxs.length === 1 ? 'line' : 'lines'}, ${dollars(total)} billed`),
-      oneoff,
+      tag,
       h(
         'button',
         {

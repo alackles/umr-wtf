@@ -3,8 +3,8 @@
 A medical plan chooser that shows the trade, not a verdict.
 
 Answer a short questionnaire (or import a table of real claim lines) and it replays your
-year under each plan's rules: premiums only, a quiet year, the expected year, a bad year,
-and the worst case. It tells you which plans are never the cheapest for your answers and
+year under each plan's rules: premiums only, a typical year, a catastrophic year, and the
+worst case. It tells you which plans are never the cheapest for your answers and
 what the extra premium on the others buys.
 
 One self-contained HTML page. It makes no network requests, and carries a

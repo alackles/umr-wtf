@@ -5,7 +5,7 @@
 
 const { CATEGORIES } = require('./plans.js');
 
-const COLUMNS = ['person', 'date', 'month', 'category', 'allowed', 'network', 'count', 'billed', 'group', 'oneoff'];
+const COLUMNS = ['person', 'date', 'month', 'category', 'allowed', 'network', 'count', 'billed', 'group'];
 
 function parseCsv(text) {
   const rows = [];
@@ -53,9 +53,6 @@ function money(v) {
   const n = Number(s);
   return isFinite(n) ? n : NaN;
 }
-
-const TRUE = /^(true|yes|y|1|x)$/i;
-const FALSE = /^(false|no|n|0|)$/i;
 
 // One raw record (object with string or native values) -> a clean item, or errors.
 function readRecord(rec, where, errors) {
@@ -107,11 +104,6 @@ function readRecord(rec, where, errors) {
   }
   const group = String(rec.group == null ? '' : rec.group).trim();
   if (group) item.group = group;
-  if (rec.oneoff != null) {
-    const o = typeof rec.oneoff === 'boolean' ? String(rec.oneoff) : String(rec.oneoff).trim();
-    if (TRUE.test(o)) item.oneoff = true;
-    else if (!FALSE.test(o)) errors.push(`${where}: oneoff "${rec.oneoff}" is not yes or no`);
-  }
   return item;
 }
 
@@ -162,7 +154,7 @@ function csvCell(v) {
 }
 
 function toCsv(items) {
-  const cols = ['person', 'month', 'category', 'allowed', 'network', 'count', 'billed', 'group', 'oneoff'];
+  const cols = ['person', 'month', 'category', 'allowed', 'network', 'count', 'billed', 'group'];
   const lines = [cols.join(',')];
   for (const it of items) {
     lines.push(
@@ -170,7 +162,6 @@ function toCsv(items) {
         .map((c) => {
           if (c === 'allowed' || c === 'billed') return it[c] == null ? '' : csvCell(Math.round(it[c] * 100) / 100);
           if (c === 'count') return it.count == null || it.count === 1 ? '' : csvCell(Math.round(it.count * 1000) / 1000);
-          if (c === 'oneoff') return it.oneoff ? 'yes' : '';
           if (c === 'network') return it.network === 'out' ? 'out' : 'in';
           return csvCell(it[c]);
         })

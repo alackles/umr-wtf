@@ -311,7 +311,7 @@ table.numbers thead th { color: var(--ink-2); font-weight: 500; }
 .grp-name { font-weight: 550; }
 input.grp-name { width: 190px; }
 .grp-meta { color: var(--muted); font-size: 12.5px; margin-right: auto; }
-.tag, .tag-check { font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+.tag { font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
 .switch { appearance: none; width: 30px; height: 18px; border-radius: 9px; background: var(--line); position: relative; cursor: pointer; flex: none; margin: 0; }
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); transition: left 0.12s; }
 .switch:checked { background: var(--accent); }

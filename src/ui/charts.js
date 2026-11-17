@@ -53,8 +53,8 @@ function niceTicks(min, max, target) {
 
 // ---- stacked bars: the front ---------------------------------------------------------------
 // One column per plan, named on the axis. Colour says what kind of money a segment is, never
-// which plan it belongs to. The solid stack is the year picked with the switch (quiet,
-// expected or bad); a dashed outline runs on up to the worst case. FSA or HSA money beyond
+// which plan it belongs to. The solid stack is the year picked with the switch (typical or
+// catastrophic); a dashed outline runs on up to the worst case. FSA or HSA money beyond
 // what the year's care uses is a dotted segment on top: set aside, not counted in the total.
 const PLOT_H = 300; // px, matches .cols in the stylesheet
 const SEGMENTS = [
@@ -63,7 +63,7 @@ const SEGMENTS = [
   ['cc', 'Copays and coinsurance'],
   ['extra', 'Charges no cap covers'],
 ];
-const YEAR_WORDS = { quiet: 'quiet year', expected: 'expected year', bad: 'bad year' };
+const YEAR_WORDS = { expected: 'typical year', bad: 'catastrophic year' };
 
 // Remember where each mark was, so a change of answers or of year glides instead of jumping.
 const lastPlace = new Map();
@@ -270,7 +270,7 @@ function segTip(p, sKey, key, name, v, ctx) {
   if (acct && acct.used > 0.5 && ctx.view === 'takehome' && key !== 'premium') {
     box.appendChild(h('div', { class: 'tip-note' }, `${dollars(acct.used)} of this year's care is paid from the ${acct.kind.toUpperCase()} with untaxed money, so it takes less out of your pay than its face value`));
   }
-  const what = { quiet: 'recurring care only, no one-offs', expected: 'the year your answers describe', bad: 'the expected year plus ' + (ctx.seriousLabel || 'one serious event') }[sKey];
+  const what = { expected: 'the year your answers describe', bad: 'the typical year plus ' + (ctx.seriousLabel || 'one serious event') }[sKey];
   box.appendChild(h('div', { class: 'tip-note' }, `${YEAR_WORDS[sKey]}: ${what}`));
   return box;
 }

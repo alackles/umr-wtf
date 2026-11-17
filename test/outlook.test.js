@@ -17,7 +17,7 @@ function single(extra) {
   return a;
 }
 
-test('healthy single person: floor, quiet and expected sit together; ceiling is premium plus cap', () => {
+test('healthy single person: floor and typical year sit together; ceiling is premium plus cap', () => {
   const hh = build(config, single({ usage: 'counts', counts: { office: 0, therapy: 0, urgent: 0, er: 0 } }));
   assert.deepStrictEqual(hh.problems, []);
   assert.strictEqual(hh.tierId, 'employee');
@@ -38,25 +38,6 @@ test('answers scale to a full year from the as-of date', () => {
   near(visits, 6, 0.05);
   const charges = hh.items.filter((it) => it.category === 'ded_coins').reduce((s, it) => s + it.allowed, 0);
   near(charges, 400, 3);
-});
-
-test('a one-off is carried over once, not scaled, and left out of the quiet year', () => {
-  const a = single({ usage: 'counts', counts: { office: 0, therapy: 0, urgent: 0, er: 0 }, dedMet: 400, oopMet: 400 + 0.15 * 2600, oneOff: 2400 });
-  a.asOf = '2099-07-02';
-  const hh = build(config, a);
-  const oneOff = hh.items.filter((it) => it.oneoff).reduce((s, it) => s + it.allowed, 0);
-  const rest = hh.items.filter((it) => !it.oneoff).reduce((s, it) => s + it.allowed, 0);
-  near(oneOff, 2400);
-  near(rest, 600 * 2, 8); // the other 600 of charges, doubled for the half year
-  const out = evaluate(config, hh, { view: 'raw' });
-  assert.ok(byId(out, 'fern').scenarios.quiet.lo < byId(out, 'fern').scenarios.expected.lo);
-});
-
-test('care that started partway through the year is scaled from when it started', () => {
-  const a = single({ usage: 'counts', counts: { office: 0, therapy: 12, urgent: 0, er: 0 }, dedMet: 0, oopMet: 240, shape: 'started', shapeMonth: 10 });
-  const hh = build(config, a); // as of year end: 12 sessions in 3 months
-  const sessions = hh.items.filter((it) => /therapy/.test(it.group)).reduce((s, it) => s + it.count, 0);
-  near(sessions, 48, 0.01);
 });
 
 test('someone at the cap with no month given: other plans are marked "at least"', () => {
@@ -178,7 +159,7 @@ test('every scenario comes with its pieces, and they add up to its cost', () => 
   a.adv.fsa = 900;
   for (const view of ['raw', 'takehome']) {
     for (const p of evaluate(config, build(config, a), { view }).plans) {
-      for (const s of ['floor', 'quiet', 'expected', 'bad', 'ceiling']) {
+      for (const s of ['floor', 'expected', 'bad', 'ceiling']) {
         const b = p.scenarios[s].parts;
         near(b.premium + b.ded + b.cc + b.extra, p.scenarios[s].lo);
       }

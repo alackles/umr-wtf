@@ -8,19 +8,19 @@ const { evaluate } = require('../src/outlook.js');
 
 const config = validateConfig(require('../demo/plans.demo.json'));
 
-const CSV = `person,date,category,allowed,network,count,billed,group,oneoff
-Sam,2099-03-14,er_facility,"$1,900.00",in,,,ER visit in March,yes
-Sam,03/14/2099,er_physician,340,in,,,ER visit in March,yes
-Sam,2099-01-06,office,110,,,,weekly therapy,
-Sam,2099-01-06,office,45,in,0,,weekly therapy,
-Ada,2099-02-02,office,190,out,,260,,
+const CSV = `person,date,category,allowed,network,count,billed,group
+Sam,2099-03-14,er_facility,"$1,900.00",in,,,ER visit in March
+Sam,03/14/2099,er_physician,340,in,,,ER visit in March
+Sam,2099-01-06,office,110,,,,weekly therapy
+Sam,2099-01-06,office,45,in,0,,weekly therapy
+Ada,2099-02-02,office,190,out,,260,
 `;
 
 test('reads CSV: money formats, both date styles, blanks as defaults', () => {
   const { items, errors } = parseTable(CSV);
   assert.deepStrictEqual(errors, []);
   assert.strictEqual(items.length, 5);
-  assert.deepStrictEqual(items[0], { person: 'Sam', date: '2099-03-14', month: 3, category: 'er_facility', allowed: 1900, network: 'in', group: 'ER visit in March', oneoff: true });
+  assert.deepStrictEqual(items[0], { person: 'Sam', date: '2099-03-14', month: 3, category: 'er_facility', allowed: 1900, network: 'in', group: 'ER visit in March' });
   assert.strictEqual(items[1].date, '2099-03-14');
   assert.strictEqual(items[2].network, 'in');
   assert.strictEqual(items[3].count, 0);
@@ -52,22 +52,21 @@ test('unreadable input is reported row by row, and nothing is imported', () => {
 test('round trip through CSV keeps the table', () => {
   const first = parseTable(CSV).items;
   const again = parseTable(toCsv(first)).items;
-  assert.deepStrictEqual(again.map((it) => [it.person, it.month, it.category, it.allowed, it.network, it.count, it.billed, it.group, it.oneoff]), first.map((it) => [it.person, it.month, it.category, it.allowed, it.network, it.count, it.billed, it.group, it.oneoff]));
+  assert.deepStrictEqual(again.map((it) => [it.person, it.month, it.category, it.allowed, it.network, it.count, it.billed, it.group]), first.map((it) => [it.person, it.month, it.category, it.allowed, it.network, it.count, it.billed, it.group]));
 });
 
 test('an imported table drives the same engine: group switches build scenarios', () => {
   const a = defaultAnswers(config, '2099-12-31');
   a.people = [Object.assign(newPerson('p1', 'self'), { name: 'Sam' }), Object.assign(newPerson('p2', 'spouse'), { name: 'Ada' })];
-  const table = { items: parseTable(CSV).items, groupsOff: [], oneoffGroups: {} };
+  const table = { items: parseTable(CSV).items, groupsOff: [] };
   const hh = buildFromTable(config, a, table);
   assert.deepStrictEqual(hh.problems, []);
   assert.strictEqual(hh.tierId, 'spouse');
   const full = evaluate(config, hh, { view: 'raw' }).plans[0].scenarios;
-  assert.ok(full.quiet.lo < full.expected.lo, 'the ER visit is a one-off, so the quiet year leaves it out');
-  // Switch the ER group off: the expected year falls to the quiet year.
+  // Switch the ER group off: it leaves the typical year.
   table.groupsOff.push('ER visit in March');
   const without = evaluate(config, buildFromTable(config, a, table), { view: 'raw' }).plans[0].scenarios;
-  assert.ok(Math.abs(without.expected.lo - full.quiet.lo) < 0.01);
+  assert.ok(without.expected.lo < full.expected.lo - 1);
   // A name in the table that is not in the people list blocks, loudly.
   a.people.pop();
   assert.ok(buildFromTable(config, a, table).problems.some((p) => p.blocking && /Ada/.test(p.text)));

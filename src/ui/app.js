@@ -13,7 +13,7 @@ const { itemsTable } = require('./table.js');
 
 const STORE_VERSION = 1;
 let config;
-let S; // { v, mode: 'A' | 'B', answers, table: { items, groupsOff, oneoffGroups }, importText, importErrors }
+let S; // { v, mode: 'A' | 'B', answers, table: { items, groupsOff }, importText, importErrors }
 const ui = { openGroups: new Set(), advOpen: false, uid: 1, scenario: 'expected' };
 let formEl;
 let resultsEl;
@@ -44,7 +44,7 @@ function load() {
   }
 }
 function fresh() {
-  return { v: STORE_VERSION, mode: 'A', answers: defaultAnswers(config, todayIso()), table: { items: [], groupsOff: [], oneoffGroups: {} }, importText: '', importErrors: [] };
+  return { v: STORE_VERSION, mode: 'A', answers: defaultAnswers(config, todayIso()), table: { items: [], groupsOff: [] }, importText: '', importErrors: [] };
 }
 
 function changed(structural) {
@@ -205,8 +205,13 @@ function renderForm() {
       )
     );
   }
+  const accounts = accountsSection(n, a, next);
+  if (accounts) {
+    formEl.appendChild(accounts);
+    n++;
+  }
   formEl.appendChild(prioritySection(n++, a));
-  formEl.appendChild(advancedSection(a, current, onPlan, next));
+  formEl.appendChild(advancedSection(a, next));
 
   const layout = formEl.parentNode;
   if (layout) layout.className = 'layout' + (S.mode === 'B' ? ' mode-b' : '');
@@ -419,6 +424,7 @@ function usageSection(n, a, current) {
         }
       }
       block.appendChild(h('div', { class: 'settle', id: `settle-${p.id}` }));
+      if (p.nextYear) block.appendChild(treatmentBlock(p, onPlan));
       return block;
     });
   return section(n, 'How much care', 'Checkups and other preventive care are free on every plan, so they do not count here.', blocks);
@@ -427,6 +433,47 @@ function usageSection(n, a, current) {
 function monthsSoFar(a) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(a.asOf || '');
   return m ? Math.max(1, Math.min(12, Number(m[2]) - 1 + Number(m[3]) / 30)) : 12;
+}
+
+// Recurring treatment that starts next year, inside the person's "how much care" block.
+function treatmentBlock(p, onPlan) {
+  if (!p.treatment) p.treatment = { on: false, startMonth: 1, months: 12, allowedPerMonth: null };
+  const tx = p.treatment;
+  const chip = h(
+    'button',
+    {
+      type: 'button',
+      class: 'chip' + (tx.on ? ' on' : ''),
+      'aria-pressed': tx.on ? 'true' : 'false',
+      'data-focus': `tx:${p.id}`,
+      onclick: () => {
+        tx.on = !tx.on;
+        changed(true);
+      },
+    },
+    h('span', { class: 'chip-label' }, 'Recurring treatment next year')
+  );
+  const out = h('div', { class: 'treatment' }, h('div', { class: 'choice' }, chip));
+  if (tx.on) {
+    out.appendChild(
+      h(
+        'div',
+        { class: 'panel', id: `tx-${p.id}` },
+        h(
+          'div',
+          { class: 'trio' },
+          field('Starting', monthSelect(tx.startMonth, (v) => {
+            tx.startMonth = v;
+            changed(false);
+          }, { aria: `${p.name} treatment start` })),
+          field('For how many months', numberBox(tx, 'months', { placeholder: '12', max: 12, aria: `${p.name} months of treatment` })),
+          field('Charges per month', numberBox(tx, 'allowedPerMonth', { prefix: '$', placeholder: String(config.events.recurring.allowedPerMonth), wide: true, aria: `${p.name} treatment charges per month` }), 'The bill before insurance. The grey number is a typical figure, used if you leave this blank.')
+        ),
+        onPlan ? h('p', { class: 'hint block' }, 'For treatment that is new next year. If it is already in this year\'s numbers, leave this off or it is counted twice.') : null
+      )
+    );
+  }
+  return out;
 }
 
 function gate(a, key, question, panel) {
@@ -537,8 +584,6 @@ function eventsSection(n, a, next) {
   const defs = [
     ['birth', 'Pregnancy or birth', () => [who(ev.birth), when(ev.birth, 'month'), cost(ev.birth, 'allowed', 'Total charges', config.events.birth.allowed), h('p', { class: 'hint block' }, 'A new baby joins the plan too: add them under "Who is covered", ticked for next year only.')]],
     ['surgery', 'Planned surgery', () => [who(ev.surgery), when(ev.surgery, 'month'), cost(ev.surgery, 'allowed', 'Total charges', config.events.surgery.allowed)]],
-    ['recurring', 'Recurring treatment', () => [who(ev.recurring), when(ev.recurring, 'startMonth', 'Starting'), field('For how many months', numberBox(ev.recurring, 'months', { placeholder: '12', max: 12, aria: 'months of treatment' })), cost(ev.recurring, 'allowedPerMonth', 'Charges per month', config.events.recurring.allowedPerMonth), h('p', { class: 'hint block' }, 'For treatment that is new next year. If it is already in this year\'s numbers, leave this off or it is counted twice.')]],
-    ['dme', 'Medical equipment', () => [who(ev.dme), cost(ev.dme, 'allowed', 'Total charges', config.events.dme.allowed)]],
     ['turning65', 'Someone turning 65', () => [field('Who', personSelect(ev.turning65.person || (a.people[0] && a.people[0].id), a.people, (v) => {
       ev.turning65.person = v;
       changed(false);
@@ -588,7 +633,6 @@ function importSection(n) {
     if (!res.errors.length) {
       t.items = res.items;
       t.groupsOff = [];
-      t.oneoffGroups = {};
       ui.openGroups.clear();
       syncPeopleFromTable();
     }
@@ -657,7 +701,7 @@ function importSection(n) {
               type: 'button',
               class: 'btn',
               onclick: () => {
-                S.importText = toCsv(t.items.map((it) => Object.assign({}, it, { oneoff: Object.prototype.hasOwnProperty.call(t.oneoffGroups, it.group || '(no group)') ? t.oneoffGroups[it.group || '(no group)'] : it.oneoff })));
+                S.importText = toCsv(t.items);
                 changed(true);
                 const el = document.getElementById('import-box');
                 if (el) el.select();
@@ -683,8 +727,7 @@ function importSection(n) {
         h('li', null, h('code', null, 'network'), ' in or out (blank means in)'),
         h('li', null, h('code', null, 'count'), ' optional: visits or fills the line stands for. Use 0 for an extra line on a visit already counted, such as a lab drawn at an office visit'),
         h('li', null, h('code', null, 'billed'), ' optional, out-of-network only: what the provider charged'),
-        h('li', null, h('code', null, 'group'), ' optional label, such as "ER visit in March" or "weekly therapy"'),
-        h('li', null, h('code', null, 'oneoff'), ' optional yes/no: one-offs are left out of the quiet year')
+        h('li', null, h('code', null, 'group'), ' optional label, such as "ER visit in March" or "weekly therapy"')
       ),
       h('p', { class: 'muted' }, `Accepted columns: ${COLUMNS.join(', ')}. Anything else is reported, not ignored.`)
     ),
@@ -692,12 +735,11 @@ function importSection(n) {
       ? h(
           'div',
           { class: 'table-host' },
-          h('p', { class: 'intro' }, 'Switch a group off to see the year without it. Tick "one-off" for things that would not happen in a quiet year.'),
+          h('p', { class: 'intro' }, 'Switch a group off to see the year without it.'),
           itemsTable({
             items: t.items,
             editable: true,
             groupsOff: t.groupsOff,
-            oneoffGroups: t.oneoffGroups,
             open: ui.openGroups,
             onChange: (structural) => {
               if (structural) syncPeopleFromTable();
@@ -731,6 +773,25 @@ function syncPeopleFromTable() {
   }
 }
 
+function accountsSection(n, a, next) {
+  const adv = a.adv;
+  const fsaPlans = config.plans.filter((p) => p.account === 'fsa');
+  const hsaPlans = config.plans.filter((p) => p.account === 'hsa');
+  if (!fsaPlans.length && !hsaPlans.length) return null;
+  const hsaMax = config.hsa ? (next.length > 1 ? config.hsa.family : config.hsa.single) : 0;
+  return section(
+    n,
+    'FSA/HSA contributions',
+    'Money taken from your pay before tax and spent on medical bills. Leave blank if you don\'t plan to use one.',
+    h(
+      'div',
+      { class: 'pair', id: 'q-accounts' },
+      fsaPlans.length ? field(`FSA election (${fsaPlans.map((p) => p.short).join(', ')})`, numberBox(adv, 'fsa', { prefix: '$', placeholder: '0', max: config.fsa.limit, aria: 'FSA election' }), `Up to ${dollars(config.fsa.limit)} a year. What bills do not use can go to other eligible things, such as over-the-counter medicine; ${dollars(config.fsa.carryover)} can carry into next year.`) : null,
+      hsaPlans.length ? field(`HSA contribution (${hsaPlans.map((p) => p.short).join(', ')})`, numberBox(adv, 'hsa', { prefix: '$', placeholder: '0', max: hsaMax, aria: 'HSA contribution' }), `Up to ${dollars(hsaMax)} a year for your tier. The money stays yours.`) : null
+    )
+  );
+}
+
 function prioritySection(n, a) {
   const biggest = Math.max(...config.plans.map((p) => p.in.ded[0]));
   return section(
@@ -761,24 +822,19 @@ function prioritySection(n, a) {
   );
 }
 
-function advancedSection(a, current, onPlan, next) {
+function advancedSection(a, next) {
   const adv = a.adv;
-  const hasFsa = config.plans.some((p) => p.account === 'fsa');
-  const hasHsa = config.plans.some((p) => p.account === 'hsa');
   const spouse = next.some((p) => p.role === 'spouse');
   const t = config.typicalAllowed;
-  const hsaMax = config.hsa ? (next.length > 1 ? config.hsa.family : config.hsa.single) : 0;
   const body = [
     h(
       'div',
       { class: 'adv-group', id: 'adv-tax' },
-      h('h3', null, 'Tax and accounts'),
+      h('h3', null, 'Tax'),
       h(
         'div',
         { class: 'trio' },
-        field('Combined tax rate on your last dollar', numberBox(adv, 'taxRate', { suffix: '%', placeholder: '30', max: 60, aria: 'tax rate' }), 'Federal bracket + 7.65% payroll tax + state. Roughly 25 to 40 for most people.'),
-        hasFsa ? field(`FSA election (${config.plans.filter((p) => p.account === 'fsa').map((p) => p.short).join(', ')})`, numberBox(adv, 'fsa', { prefix: '$', placeholder: '0', max: config.fsa.limit, aria: 'FSA election' }), `Up to ${dollars(config.fsa.limit)} a year. What bills do not use can go to other eligible things, such as over-the-counter medicine; ${dollars(config.fsa.carryover)} can carry into next year.`) : null,
-        hasHsa ? field(`HSA contribution (${config.plans.filter((p) => p.account === 'hsa').map((p) => p.short).join(', ')})`, numberBox(adv, 'hsa', { prefix: '$', placeholder: '0', max: hsaMax, aria: 'HSA contribution' }), `Up to ${dollars(hsaMax)} a year for your tier. The money stays yours.`) : null
+        field('Combined tax rate on your last dollar', numberBox(adv, 'taxRate', { suffix: '%', placeholder: '30', max: 60, aria: 'tax rate' }), 'Federal bracket + 7.65% payroll tax + state. Roughly 25 to 40 for most people.')
       )
     ),
     h(
@@ -790,53 +846,15 @@ function advancedSection(a, current, onPlan, next) {
       config.spousalSurcharge && spouse ? check(adv, 'surcharge', `Spousal surcharge of ${dollars(config.spousalSurcharge.monthly)} a month applies. ${config.spousalSurcharge.text || ''}`, { structural: false }) : null
     ),
   ];
-  if (S.mode === 'A' && current && onPlan.length) {
+  if (S.mode === 'A') {
     body.push(
       h(
         'div',
-        { class: 'adv-group', id: 'adv-shape' },
-        h('h3', null, 'The shape of this year'),
-        h('p', { class: 'hint block' }, 'Numbers are scaled up to twelve months as if care was spread evenly. Say so here if it was not.'),
-        onPlan.map((p) =>
-          h(
-            'div',
-            { class: 'person-block' },
-            h('h4', null, p.name),
-            h(
-              'div',
-              { class: 'trio' },
-              field(
-                'Regular care',
-                h(
-                  'select',
-                  {
-                    'aria-label': `${p.name} shape of the year`,
-                    onchange: (e) => {
-                      p.shape = e.target.value;
-                      if (p.shape !== 'steady' && !p.shapeMonth) p.shapeMonth = 6;
-                      changed(true);
-                    },
-                  },
-                  h('option', { value: 'steady', selected: p.shape === 'steady' }, 'ran all year'),
-                  h('option', { value: 'started', selected: p.shape === 'started' }, 'started partway, still going'),
-                  h('option', { value: 'stopped', selected: p.shape === 'stopped' }, 'has stopped')
-                )
-              ),
-              p.shape === 'started'
-                ? field('Started in', monthSelect(p.shapeMonth, (v) => {
-                    p.shapeMonth = v;
-                    changed(false);
-                  }))
-                : null,
-              field('A one-off this year, total charges', numberBox(p, 'oneOff', { prefix: '$', placeholder: '0', wide: true, aria: `${p.name} one-off` }), 'A surgery, a hospital stay: the bill before insurance. Carried over once, and left out of the quiet year.')
-            )
-          )
-        )
-      )
-    );
-  }
-  if (S.mode === 'A') {
-    body.push(
+        { class: 'adv-group', id: 'adv-dme' },
+        h('h3', null, 'Medical equipment next year'),
+        h('p', { class: 'hint block' }, 'Equipment bought or rented next year, such as a CPAP machine or a wheelchair: the bill before insurance. Leave blank for none.'),
+        h('div', { class: 'trio' }, next.map((p) => field(p.name, numberBox(p, 'dme', { prefix: '$', placeholder: '0', wide: true, aria: `${p.name} medical equipment` }))))
+      ),
       h(
         'div',
         { class: 'adv-group', id: 'adv-typical' },
@@ -851,16 +869,10 @@ function advancedSection(a, current, onPlan, next) {
           field('ER, the facility', numberBox(adv.typical, 'er_facility', { prefix: '$', placeholder: String(t.er_facility), aria: 'ER facility price' })),
           field('ER, the physician', numberBox(adv.typical, 'er_physician', { prefix: '$', placeholder: String(t.er_physician), aria: 'ER physician price' }))
         )
-      ),
-      h(
-        'div',
-        { class: 'adv-group', id: 'adv-oon' },
-        h('h3', null, 'Out-of-network'),
-        field('Share of an out-of-network charge the plan recognises', numberBox(adv, 'oonShare', { suffix: '%', placeholder: String(Math.round(config.oonAllowedShare * 100)), max: 100, aria: 'out-of-network share' }), 'The rest is yours and counts toward nothing.')
       )
     );
   }
-  const details = h('details', { class: 'card advanced', id: 'advanced', open: ui.advOpen }, h('summary', null, h('h2', null, 'Advanced'), h('span', { class: 'muted' }, 'tax, accounts, premium credits, prices. All have defaults, listed under the chart.')), body);
+  const details = h('details', { class: 'card advanced', id: 'advanced', open: ui.advOpen }, h('summary', null, h('h2', null, 'Advanced'), h('span', { class: 'muted' }, S.mode === 'A' ? 'tax rate, premium credits, medical equipment, prices. Defaults are listed under the chart.' : 'tax rate, premium credits. Defaults are listed under the chart.')), body);
   details.addEventListener('toggle', () => {
     ui.advOpen = details.open;
   });
@@ -936,7 +948,7 @@ function renderWorking(res) {
     if (w.knownCoins > 0.5) bits.push(`${dollars(w.knownCoins)} ER coinsurance`);
     if (w.coinsurance > 0.5) bits.push(`${dollars(w.coinsurance)} coinsurance at ${Math.round(w.share * 100)}%`);
     let text = `Read as ${bits.join(' + ')}. That is about ${dollars(w.charges)} of care billed through the deductible so far`;
-    if (w.recurring > 0.5 || w.oneOff > 0.5) text += `, or ${dollars(w.recurring)} a year` + (w.oneOff > 0.5 ? ` plus a ${dollars(w.oneOff)} one-off` : '');
+    if (w.recurring > 0.5) text += `, or ${dollars(w.recurring)} a year`;
     text += w.censored ? (w.capMonth ? '. At the cap: projected from the months before it.' : '. At the cap, so this is a lower bound.') : '.';
     el.textContent = text;
   }
@@ -1043,11 +1055,10 @@ function renderResults() {
   );
 
   // Which year the solid bars show. The dashed outline always runs on to the worst case.
-  const year = ['quiet', 'expected', 'bad'].includes(ui.scenario) ? ui.scenario : 'expected';
+  const year = ['expected', 'bad'].includes(ui.scenario) ? ui.scenario : 'expected';
   const yearNote = {
-    quiet: 'Recurring care only: this year\'s one-offs do not repeat.',
     expected: 'The year your answers describe.',
-    bad: `The expected year, plus ${(config.seriousEvent && config.seriousEvent.label) || 'one serious event'}.`,
+    bad: `The typical year, plus ${(config.seriousEvent && config.seriousEvent.label) || 'one serious event'}.`,
   }[year];
   resultsEl.appendChild(
     h(
@@ -1057,9 +1068,8 @@ function renderResults() {
         'div',
         { class: 'toggle', role: 'group', 'aria-label': 'Which year the bars show' },
         [
-          ['quiet', 'Quiet year'],
-          ['expected', 'Expected'],
-          ['bad', 'Bad year'],
+          ['expected', 'Typical year'],
+          ['bad', 'Catastrophic year'],
         ].map(([v, label]) =>
           h(
             'button',
@@ -1117,7 +1127,7 @@ function renderResults() {
     const standing = out.plans.filter((p) => !p.neverCheapest);
     if (standing.length === 1 && out.plans.length > 1) {
       resultsEl.appendChild(
-        h('div', { class: 'block' }, h('h3', null, 'The trade'), h('p', null, `For your answers there is no trade to weigh over a year: ${standing[0].name} costs least in the quiet year, the expected year, the bad year and the worst case. The others only win on the size of the paycheck deduction.`))
+        h('div', { class: 'block' }, h('h3', null, 'The trade'), h('p', null, `For your answers there is no trade to weigh over a year: ${standing[0].name} costs least in the typical year, the catastrophic year and the worst case. The others only win on the size of the paycheck deduction.`))
       );
     }
   }
@@ -1171,7 +1181,6 @@ function renderResults() {
         items: hh.allItems,
         editable: false,
         groupsOff: a.groupsOff,
-        oneoffGroups: {},
         open: ui.openGroups,
         personName: (id) => nameOf.get(id) || id,
         onChange: () => {

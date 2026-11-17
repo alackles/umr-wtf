@@ -9,17 +9,16 @@
 const { replay, ceiling } = require('./engine.js');
 const { expandVariants, premiumPerPeriod, getTier } = require('./plans.js');
 
-const SCENARIOS = ['floor', 'quiet', 'expected', 'bad', 'ceiling'];
+const SCENARIOS = ['floor', 'expected', 'bad', 'ceiling'];
 const SCENARIO_LABELS = {
   floor: 'Floor: premiums only',
-  quiet: 'Quiet year',
-  expected: 'Expected',
-  bad: 'Bad year',
+  expected: 'Typical year',
+  bad: 'Catastrophic year',
   ceiling: 'Ceiling',
 };
 // The label "never the cheapest" is decided on these. The floor is left out on purpose: it is
 // the paycheck dimension, which the label reports separately.
-const JUDGED = ['quiet', 'expected', 'bad', 'ceiling'];
+const JUDGED = ['expected', 'bad', 'ceiling'];
 
 function premiumYear(config, plan, hh) {
   const months = hh.monthsCovered || 12;
@@ -88,7 +87,7 @@ function seriousItems(config, person, month) {
     network: 'in',
     category: it.category,
     allowed: it.allowed,
-    group: 'Bad year: ' + it.label,
+    group: 'Catastrophic year: ' + it.label,
   }));
 }
 
@@ -101,7 +100,6 @@ function evaluate(config, hh, opts = {}) {
   const tier = getTier(config, hh.tierId);
   const family = hh.family != null ? hh.family : tier.family;
   const expectedItems = hh.items;
-  const quietItems = expectedItems.filter((it) => !it.oneoff);
   const anyRx = expectedItems.some((it) => /^rx_/.test(it.category));
   const anyOut = expectedItems.some((it) => it.network === 'out');
   const eventMonth = Math.min(hh.monthsCovered || 12, 7);
@@ -110,7 +108,6 @@ function evaluate(config, hh, opts = {}) {
   const plans = config.plans.map((plan) => {
     const { variants, open } = expandVariants(plan, { family, rx: anyRx });
     const per = variants.map((v) => {
-      const quiet = replay(quietItems, v.plan, { family });
       const expected = replay(expectedItems, v.plan, { family });
       // The serious event lands on whoever it would cost the household most.
       let bad = null;
@@ -127,11 +124,10 @@ function evaluate(config, hh, opts = {}) {
       // the figure counts both caps plus those extras as described. It is still not a true
       // ceiling, and the page says so.
       const cap = ceiling(v.plan, family) + (anyOut ? (family ? v.plan.out.oop[1] : v.plan.out.oop[0]) : 0) + bad.uncapped;
-      const care = { floor: 0, quiet: quiet.memberTotal, expected: expected.memberTotal, bad: bad.memberTotal, ceiling: cap };
+      const care = { floor: 0, expected: expected.memberTotal, bad: bad.memberTotal, ceiling: cap };
       const split = (r) => ({ ded: r.parts.ded, cc: r.parts.copay + r.parts.coins, extra: r.uncapped });
       const parts = {
         floor: breakdown(config, v.plan, hh, { ded: 0, cc: 0, extra: 0 }, view),
-        quiet: breakdown(config, v.plan, hh, split(quiet), view),
         expected: breakdown(config, v.plan, hh, split(expected), view),
         bad: breakdown(config, v.plan, hh, split(bad), view),
         ceiling: breakdown(config, v.plan, hh, { ded: 0, cc: cap, extra: 0 }, view),
@@ -139,7 +135,7 @@ function evaluate(config, hh, opts = {}) {
       const cost = {};
       for (const s of SCENARIOS) cost[s] = parts[s].total;
       const atLeast = (hh.lowerBound || []).some((id) => !expected.capped[id]);
-      return { assumptions: v.assumptions, plan: v.plan, care, cost, parts, expected, quiet, bad, badPerson, atLeast };
+      return { assumptions: v.assumptions, plan: v.plan, care, cost, parts, expected, bad, badPerson, atLeast };
     });
 
     const scenarios = {};
@@ -243,7 +239,7 @@ function sensitivity(config, hh, opts = {}) {
 // The same thing in a sentence. `short` maps a plan id to its short name.
 function sensitivitySentence(sens, short) {
   const best = short(sens.cheapestAtEstimate);
-  if (sens.nothingToScale) return `Your estimate has no care in it beyond free checkups, so ${best} costs least. The bad year and the worst case show what happens if that changes.`;
+  if (sens.nothingToScale) return `Your estimate has no care in it beyond free checkups, so ${best} costs least. The catastrophic year and the worst case show what happens if that changes.`;
   if (!sens.crossings.length) return `${best} costs least however much care you end up using, from none to ${sens.maxK} times your estimate.`;
   const below = sens.crossings.filter((c) => c.k <= 1).pop();
   const above = sens.crossings.find((c) => c.k > 1);

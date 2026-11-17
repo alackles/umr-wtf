@@ -40,9 +40,8 @@ function newPerson(id, role, name) {
     capMonth: null,
     rx: {}, // { rx_generic: { fills, price }, ... }  fills per month
     oon: { visits: null, charge: null }, // visits per year, charge per visit
-    shape: 'steady', // 'steady' | 'started' | 'stopped'
-    shapeMonth: null,
-    oneOff: null,
+    treatment: { on: false, startMonth: 1, months: 12, allowedPerMonth: null }, // new next year
+    dme: null, // medical equipment next year, total charges
     trust: null, // 'dollars' | 'counts' when the inputs disagree
   };
 }
@@ -58,8 +57,6 @@ function defaultAnswers(config, todayIso) {
     events: {
       birth: { on: false, person: null, month: 6, allowed: null },
       surgery: { on: false, person: null, month: 6, allowed: null },
-      recurring: { on: false, person: null, startMonth: 1, months: 12, allowedPerMonth: null },
-      dme: { on: false, person: null, month: 1, allowed: null },
       turning65: { on: false, person: null, month: 6 },
       leaving: { on: false, month: 6 },
     },
@@ -73,7 +70,6 @@ function defaultAnswers(config, todayIso) {
       creditSpouse: true,
       surcharge: false,
       typical: {}, // overrides of config.typicalAllowed
-      oonShare: null, // percent
     },
     view: 'takehome',
   };
@@ -110,7 +106,7 @@ function build(config, answers) {
   const working = [];
   const items = [];
   const typical = typicalAllowed(config, answers);
-  const adv = answers.adv || {};
+  const planned = []; // things the person told us are coming next year, for the "assuming" line
 
   const people = answers.people || [];
   const current = answers.currentPlan ? getPlan(config, answers.currentPlan) : null;
@@ -199,10 +195,8 @@ function build(config, answers) {
     }
 
     let annual; // visits in a full year
-    let erVisits; // one-offs: carried over as they happened, not scaled
-    let recurring = 0; // yearly charges through deductible and coinsurance, recurring
-    let oneOff = 0; // the same, one-off
-    let recurringIsOneOff = false;
+    let erVisits; // carried over as they happened, not scaled
+    let recurring = 0; // yearly charges through deductible and coinsurance
 
     if (onPlan) {
       const dedMet = num(person.dedMet);
@@ -250,12 +244,10 @@ function build(config, answers) {
       for (const n of est.notes) notes.push(Object.assign({ person: person.id }, n, { text: `${person.name}: ${n.text}` }));
       if (est.problems.some((p) => p.blocking)) continue;
 
-      // Scaling to a full year.
-      const start = person.shape === 'started' ? Math.max(0, (num(person.shapeMonth) || 1) - 1) : 0;
-      const stopped = person.shape === 'stopped';
+      // Scaling to a full year, as if care so far was spread evenly.
       const endCharges = censored && capMonth ? Math.min(elapsed, capMonth) : elapsed;
-      const fVisits = stopped ? 1 : 12 / Math.max(0.5, elapsed - start);
-      const fCharges = stopped ? 1 : 12 / Math.max(0.5, endCharges - start);
+      const fVisits = 12 / Math.max(0.5, elapsed);
+      const fCharges = 12 / Math.max(0.5, endCharges);
 
       let extraVisits = 0;
       if (est.extraCopays > 0) {
@@ -269,18 +261,7 @@ function build(config, answers) {
       };
       erVisits = ytd.er * est.usageScale;
 
-      const declared = num(person.oneOff) || 0;
-      if (declared > 0) {
-        if (censored) oneOff = declared;
-        else {
-          oneOff = Math.min(declared, est.residual);
-          if (declared > est.residual + 100) {
-            notes.push({ code: 'oneoff-large', person: person.id, text: `${person.name}: the one-off (${money(declared)}) is more than the charges the numbers account for (${money(est.residual)}), so the smaller figure was used.` });
-          }
-        }
-      }
-      recurring = Math.max(0, est.residual - oneOff) * fCharges;
-      recurringIsOneOff = stopped;
+      recurring = Math.max(0, est.residual) * fCharges;
       if (censored && !capMonth) lowerBound.push(person.id);
 
       working.push({
@@ -294,7 +275,6 @@ function build(config, answers) {
         share: current.in.coins,
         charges: est.charges,
         residual: est.residual,
-        oneOff,
         factor: fCharges,
         recurring,
         censored,
@@ -320,17 +300,26 @@ function build(config, answers) {
     items.push(...monthly(Object.assign({ category: 'urgent', group: label('urgent care') }, who), annual.urgent, typical.urgent, allMonths));
     if (erVisits > 0) {
       const m = Math.min(lastMonth, 6);
-      const base = Object.assign({ group: label(erVisits === 1 ? 'ER visit' : 'ER visits'), oneoff: true, month: m }, who);
+      const base = Object.assign({ group: label(erVisits === 1 ? 'ER visit' : 'ER visits'), month: m }, who);
       items.push(Object.assign({}, base, { category: 'er_facility', count: erVisits, allowed: typical.er_facility * erVisits }));
       items.push(Object.assign({}, base, { category: 'er_physician', count: erVisits, allowed: typical.er_physician * erVisits }));
     }
     if (recurring > 0) {
       const base = Object.assign({ category: 'ded_coins', group: label('labs, imaging, hospital and other care') }, who);
-      if (recurringIsOneOff) base.oneoff = true;
       for (const m of allMonths) items.push(Object.assign({}, base, { month: m, allowed: recurring / 12 }));
     }
-    if (oneOff > 0) {
-      items.push(Object.assign({ category: 'ded_coins', group: label('one-off from this year'), oneoff: true, month: Math.min(lastMonth, 6), allowed: oneOff }, who));
+    const tx = person.treatment;
+    if (tx && tx.on) {
+      const per = num(tx.allowedPerMonth) != null ? num(tx.allowedPerMonth) : config.events.recurring.allowedPerMonth;
+      const start = Math.max(1, num(tx.startMonth) || 1);
+      const count = Math.max(1, num(tx.months) || 12);
+      for (let m = start; m < start + count && m <= lastMonth; m++) {
+        items.push(Object.assign({ category: 'ded_coins', group: label(config.events.recurring.label), month: m, allowed: per, planned: true }, who));
+      }
+      planned.push({ key: 'recurring', person: person.id, allowed: per, usedDefault: num(tx.allowedPerMonth) == null, anchor: `tx-${person.id}` });
+    }
+    if (num(person.dme) > 0) {
+      items.push(Object.assign({ category: 'ded_coins', group: label(config.events.dme.label), month: 1, allowed: num(person.dme), planned: true }, who));
     }
     for (const r of rx) {
       anyRx = true;
@@ -341,7 +330,7 @@ function build(config, answers) {
       const charge = num(person.oon && person.oon.charge) || 0;
       if (visits > 0 && charge > 0) {
         anyOon = true;
-        const share = (num(adv.oonShare) != null ? num(adv.oonShare) / 100 : config.oonAllowedShare) || 1;
+        const share = config.oonAllowedShare || 1;
         const per = visits / 12;
         for (const m of allMonths) {
           items.push({ person: person.id, network: 'out', category: 'office', group: label('out-of-network visits'), month: m, count: per, billed: charge * per, allowed: charge * per * share });
@@ -355,7 +344,6 @@ function build(config, answers) {
   const nextIds = new Set(nextYear.map((p) => p.id));
   const nameOf = (id) => (people.find((p) => p.id === id) || {}).name;
   const pick = (id) => (nextIds.has(id) ? id : nextYear.length ? nextYear[0].id : null);
-  const planned = [];
   const one = (key, monthDefault) => {
     const e = ev[key];
     if (!e || !e.on) return;
@@ -368,19 +356,6 @@ function build(config, answers) {
   };
   one('birth', 6);
   one('surgery', 6);
-  one('dme', 1);
-  if (ev.recurring && ev.recurring.on) {
-    const who = pick(ev.recurring.person);
-    if (who) {
-      const per = num(ev.recurring.allowedPerMonth) != null ? num(ev.recurring.allowedPerMonth) : config.events.recurring.allowedPerMonth;
-      const start = Math.max(1, num(ev.recurring.startMonth) || 1);
-      const count = Math.max(1, num(ev.recurring.months) || 12);
-      for (let m = start; m < start + count && m <= lastMonth; m++) {
-        items.push({ person: who, network: 'in', category: 'ded_coins', month: m, allowed: per, group: `${nameOf(who)}: ${config.events.recurring.label}`, planned: true });
-      }
-      planned.push({ key: 'recurring', person: who, allowed: per, usedDefault: num(ev.recurring.allowedPerMonth) == null });
-    }
-  }
 
   // ---- money facts ---------------------------------------------------------------------
   const facts = moneyFacts(config, answers, nextYear, family, lastMonth, notes);
@@ -395,14 +370,12 @@ function build(config, answers) {
     A(`preset-${person.id}`, text, `q-usage-${person.id}`);
   }
   if (!oonOn) A('oon', 'no out-of-network care', 'g-oon');
-  else if (anyOon) A('oon-share', `the plan recognises ${Math.round((num(adv.oonShare) != null ? num(adv.oonShare) / 100 : config.oonAllowedShare) * 100)}% of an out-of-network charge (a guess; an old EOB will show the real figure)`, 'adv-oon');
+  else if (anyOon) A('oon-share', `the plan recognises ${Math.round(config.oonAllowedShare * 100)}% of an out-of-network charge (a guess)`, null);
   if (!rxOn) A('rx', 'no regular prescriptions', 'g-rx');
   else if (defaultPricesUsed.size) {
     A('rx-price', `cash prices of ${[...defaultPricesUsed].map((t) => `${money(RX_DEFAULT_PRICE[t])} per ${RX_LABEL[t]} fill`).join(', ')}`, 'g-rx');
   }
-  if (current && thisYear.length && people.every((p) => p.shape === 'steady') && !people.some((p) => num(p.oneOff) > 0)) {
-    A('shape', 'this year\'s care was spread evenly, with no one-offs', 'adv-shape');
-  }
+  if (current && thisYear.length) A('shape', 'this year\'s care so far was spread evenly across the months', null);
   const inPlay = new Set(items.map((it) => it.group && it.group.split(': ')[1]));
   const typ = [];
   if (inPlay.has('office visits')) typ.push(`${money(typical.office)} for an office visit`);
@@ -413,7 +386,7 @@ function build(config, answers) {
   for (const p of planned) {
     if (!p.usedDefault) continue;
     const label = config.events[p.key].label;
-    A(`event-${p.key}`, p.key === 'recurring' ? `${label} at ${money(p.allowed)} a month` : `${label} at ${money(p.allowed)}`, `ev-${p.key}`);
+    A(`event-${p.key}-${p.person}`, p.key === 'recurring' ? `${label} at ${money(p.allowed)} a month` : `${label} at ${money(p.allowed)}`, p.anchor || `ev-${p.key}`);
   }
 
   finishAssumptions(config, facts, A);
@@ -479,14 +452,14 @@ function finishAssumptions(config, facts, A) {
   const f = facts.public;
   const hasFsa = config.plans.some((p) => p.account === 'fsa');
   const hasHsa = config.plans.some((p) => p.account === 'hsa');
-  if (!(f.fsa > 0) && !(f.hsa > 0) && (hasFsa || hasHsa)) A('accounts', `no ${[hasFsa && 'FSA', hasHsa && 'HSA'].filter(Boolean).join(' or ')} contributions`, 'adv-tax');
+  if (!(f.fsa > 0) && !(f.hsa > 0) && (hasFsa || hasHsa)) A('accounts', `no ${[hasFsa && 'FSA', hasHsa && 'HSA'].filter(Boolean).join(' or ')} contributions`, 'q-accounts');
   A('tax', `a ${Math.round(f.taxRate * 100)}% combined tax rate`, 'adv-tax');
-  if (config.seriousEvent) A('bad-year', `a bad year means ${config.seriousEvent.label}`, null);
+  if (config.seriousEvent) A('bad-year', `a catastrophic year means ${config.seriousEvent.label}`, null);
 }
 
 // Path B: an imported (or hand-edited) table of line items. The people list supplies roles
 // for the premium tier; the table supplies the care.
-//   table: { items: [...], groupsOff: [labels], oneoffGroups: { label: bool } }
+//   table: { items: [...], groupsOff: [labels] }
 function buildFromTable(config, answers, table) {
   const problems = [];
   const notes = [];
@@ -504,13 +477,8 @@ function buildFromTable(config, answers, table) {
   const lastMonth = leaving ? Math.min(12, Math.max(1, num(ev.leaving.month) || 12)) : 12;
 
   const off = new Set((table && table.groupsOff) || []);
-  const oneoffs = (table && table.oneoffGroups) || {};
   const UNGROUPED = '(no group)';
-  const all = ((table && table.items) || []).map((it) => {
-    const group = it.group || UNGROUPED;
-    const flagged = Object.prototype.hasOwnProperty.call(oneoffs, group) ? !!oneoffs[group] : !!it.oneoff;
-    return Object.assign({}, it, { group, oneoff: flagged });
-  });
+  const all = ((table && table.items) || []).map((it) => Object.assign({}, it, { group: it.group || UNGROUPED }));
   if (!all.length) problems.push({ code: 'table-empty', blocking: true, anchor: 'import-box', text: 'Paste or load a table of line items to begin.' });
   const byName = new Map(people.map((p) => [p.name.trim().toLowerCase(), p]));
   const unknown = new Set();
