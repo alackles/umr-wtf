@@ -8,8 +8,8 @@
   --muted: #737c71;
   --hair: #dae2d6;
   --line: #b7c3b3;
-  --accent: #1c5cab;
-  --accent-wash: #e6effb;
+  --accent: #1a6350;
+  --accent-wash: #e0f0e7;
   --pick: color-mix(in srgb, var(--accent) 11%, transparent); /* band behind the plan that wins on what matters most */
   --warn-wash: #fdf1dc;
   --warn-ink: #7a4a00;
@@ -37,8 +37,8 @@
     --muted: #8b9589;
     --hair: #272e27;
     --line: #3e493d;
-    --accent: #86b6ef;
-    --accent-wash: #16263b;
+    --accent: #7ccdaa;
+    --accent-wash: #142c22;
     --warn-wash: #33270f;
     --warn-ink: #f3c877;
     --bad: #f08a80;
@@ -65,6 +65,7 @@ body {
 h1, h2, h3, h4, p { margin: 0; }
 button, input, select, textarea { font: inherit; color: inherit; }
 b { font-weight: 650; }
+input[type="checkbox"] { accent-color: var(--accent); } /* ticks take the page's accent, not the browser's blue */
 .muted { color: var(--muted); }
 code { font-family: var(--mono); font-size: 0.92em; background: var(--sunk); padding: 1px 4px; border-radius: 4px; }
 
