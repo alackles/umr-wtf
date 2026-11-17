@@ -49,7 +49,7 @@ function show(env, start, header) {
     autocomplete: 'current-password',
     autocapitalize: 'none',
     spellcheck: 'false',
-    'aria-describedby': 'unlock-msg',
+    'aria-describedby': 'unlock-help unlock-msg',
   });
   const button = h('button', { type: 'submit', class: 'btn primary' }, 'Unlock');
   const msg = h('p', { class: 'unlock-msg', id: 'unlock-msg', role: 'status' });
@@ -77,12 +77,9 @@ function show(env, start, header) {
         }
       },
     },
-    h(
-      'label',
-      { class: 'field', for: 'passphrase' },
-      h('span', null, 'Enter the site passphrase (if you don\'t know the passphrase, ask the person who sent this to you).')
-    ),
+    h('label', { class: 'field', for: 'passphrase' }, h('span', null, 'Enter the site passphrase')),
     h('div', { class: 'unlock-row' }, input, button),
+    h('p', { class: 'unlock-help', id: 'unlock-help' }, 'If you don\'t know the passphrase, ask the person who sent this to you.'),
     msg
   );
   app.appendChild(form);
